@@ -585,6 +585,14 @@ export function createDocx({ id, result }) {
 }
 
 async function collectBody(request) {
+  if (typeof request.body === 'string') {
+    return request.body;
+  }
+
+  if (request.body && typeof request.body === 'object') {
+    return new URLSearchParams(request.body).toString();
+  }
+
   const chunks = [];
   for await (const chunk of request) {
     chunks.push(chunk);
@@ -745,15 +753,16 @@ function send(response, statusCode, body, contentType = contentTypes.text, heade
   response.end(body);
 }
 
-export function createAppServer() {
-  return http.createServer(async (request, response) => {
+export async function handleRequest(request, response) {
+  const requestUrl = new URL(request.url || '/', 'http://localhost');
+
   try {
-    if (request.method === 'GET' && request.url === '/') {
+    if (request.method === 'GET' && requestUrl.pathname === '/') {
       send(response, 200, renderForm(), contentTypes.html);
       return;
     }
 
-    if (request.method === 'POST' && request.url === '/export') {
+    if (request.method === 'POST' && requestUrl.pathname === '/export') {
       const body = await collectBody(request);
       const form = new URLSearchParams(body);
       const id = String(form.get('id') || '').trim();
@@ -779,7 +788,10 @@ export function createAppServer() {
   } catch (error) {
     send(response, 500, renderForm(error.message), contentTypes.html);
   }
-  });
+}
+
+export function createAppServer() {
+  return http.createServer(handleRequest);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

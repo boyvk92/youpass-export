@@ -11,9 +11,5 @@
       "src": "/(.*)",
       "dest": "/api/handler.js"
     }
-  ],
-  "env": {
-    "E_LEARNING_API_URL": "@e_learning_api_url",
-    "PORT": "@port"
-  }
+  ]
 }
