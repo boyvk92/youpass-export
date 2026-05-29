@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/**/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/handler.js"
+    }
+  ],
+  "env": {
+    "E_LEARNING_API_URL": "@e_learning_api_url",
+    "PORT": "@port"
+  }
+}
