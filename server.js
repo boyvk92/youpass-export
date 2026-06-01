@@ -33,6 +33,7 @@ const IELTS_TYPES = {
 
 const YOUPASS_QUESTION_TYPES = {
   MULTIPLE_CHOICE: IELTS_TYPES[1],
+  MULTIPLE_CHOICE_ONE: IELTS_TYPES[1],
   MULTIPLE_SELECTION: IELTS_TYPES[1],
   SINGLE_CHOICE: IELTS_TYPES[1],
   SINGLE_SELECTION: IELTS_TYPES[1],
@@ -94,7 +95,34 @@ function decodeHtmlEntities(value) {
     ldquo: '"',
     hellip: '...',
     ndash: '-',
-    mdash: '-'
+    mdash: '-',
+    aacute: 'á',
+    acirc: 'â',
+    agrave: 'à',
+    aring: 'å',
+    atilde: 'ã',
+    auml: 'ä',
+    eacute: 'é',
+    ecirc: 'ê',
+    egrave: 'è',
+    euml: 'ë',
+    iacute: 'í',
+    icirc: 'î',
+    igrave: 'ì',
+    iuml: 'ï',
+    oacute: 'ó',
+    ocirc: 'ô',
+    ograve: 'ò',
+    otilde: 'õ',
+    ouml: 'ö',
+    uacute: 'ú',
+    ucirc: 'û',
+    ugrave: 'ù',
+    uuml: 'ü',
+    yacute: 'ý',
+    yuml: 'ÿ',
+    ccedil: 'ç',
+    ntilde: 'ñ'
   };
 
   return String(value ?? '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity) => {
@@ -259,12 +287,104 @@ function paragraph(text) {
   return `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
+function styledParagraph(text, options = {}) {
+  const { align = '', bold = false, color = '', size = '', before = '', after = '' } = options;
+  const paragraphProps = [
+    align ? `<w:jc w:val="${align}"/>` : '',
+    before || after ? `<w:spacing${before ? ` w:before="${before}"` : ''}${after ? ` w:after="${after}"` : ''}/>` : ''
+  ].join('');
+  const runProps = [
+    bold ? '<w:b/>' : '',
+    color ? `<w:color w:val="${color}"/>` : '',
+    size ? `<w:sz w:val="${size}"/>` : ''
+  ].join('');
+
+  return `<w:p>${paragraphProps ? `<w:pPr>${paragraphProps}</w:pPr>` : ''}<w:r>${runProps ? `<w:rPr>${runProps}</w:rPr>` : ''}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+function readingTestTitle(text) {
+  return styledParagraph(text, { align: 'center', bold: true, size: '34', after: '360' });
+}
+
+function passageLabel(text) {
+  return styledParagraph(text, { bold: true, color: '0F4C5C', size: '36', before: '160', after: '220' });
+}
+
+function passageTitle(text) {
+  return styledParagraph(text, { align: 'center', bold: true, size: '28', after: '260' });
+}
+
+function passageParagraph(text) {
+  return styledParagraph(text, { size: '26', before: '80', after: '80' });
+}
+
 function questionGroup(text) {
   return `<w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="1F6FEB"/><w:sz w:val="28"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 function questionTitle(text) {
   return `<w:p><w:pPr><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+function answerParagraph(text) {
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="40"/><w:shd w:fill="00FFFF"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+function choiceParagraph(line) {
+  const shading = line.correct ? '<w:shd w:fill="00FFFF"/>' : '';
+  const bold = line.correct ? '<w:b/>' : '';
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
+}
+
+function runXml(text, options = {}) {
+  const { bold = false, color = '', size = '' } = options;
+  const runProps = [
+    bold ? '<w:b/>' : '',
+    color ? `<w:color w:val="${color}"/>` : '',
+    size ? `<w:sz w:val="${size}"/>` : ''
+  ].join('');
+
+  return `<w:r>${runProps ? `<w:rPr>${runProps}</w:rPr>` : ''}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+}
+
+function explanationRuns(text) {
+  const stepMatch = String(text).match(/^(Bước\s+\d+\s*:)(.*)$/i);
+
+  if (stepMatch) {
+    return [
+      runXml(stepMatch[1], { bold: true, color: '444444', size: '22' }),
+      runXml(stepMatch[2], { color: '444444', size: '22' })
+    ].join('');
+  }
+
+  return runXml(text, { color: '444444', size: '22' });
+}
+
+function explanationParagraph(line) {
+  const text = typeof line === 'string' ? line : line.text;
+  const boxPosition = typeof line === 'string' ? 'single' : line.boxPosition;
+  const isSpacer = typeof line !== 'string' && line.spacer;
+  const isFirst = boxPosition === 'first' || boxPosition === 'single';
+  const isLast = boxPosition === 'last' || boxPosition === 'single';
+  const borders = [
+    isFirst ? '<w:top w:val="single" w:sz="12" w:space="1" w:color="D6B656"/>' : '',
+    '<w:left w:val="single" w:sz="12" w:space="4" w:color="D6B656"/>',
+    '<w:right w:val="single" w:sz="12" w:space="4" w:color="D6B656"/>',
+    isLast ? '<w:bottom w:val="single" w:sz="12" w:space="1" w:color="D6B656"/>' : ''
+  ].join('');
+  const shading = isFirst ? '<w:shd w:fill="FFF2CC"/>' : '';
+  const spacing = `<w:spacing w:before="${isFirst ? '120' : '0'}" w:after="${isSpacer ? '180' : isLast ? '120' : '0'}"/>`;
+  const content = text.startsWith('Giải thích:')
+    ? [
+      runXml('Giải thích:', { bold: true, color: '333333', size: '22' }),
+      runXml(' ', { color: '444444', size: '22' }),
+      explanationRuns(text.replace(/^Giải thích:\s*/, ''))
+    ].join('')
+    : isSpacer
+      ? runXml(' ', { color: '444444', size: '22' })
+      : explanationRuns(text);
+
+  return `<w:p><w:pPr>${spacing}<w:pBdr>${borders}</w:pBdr>${shading}</w:pPr>${content}</w:p>`;
 }
 
 function heading(text) {
@@ -278,6 +398,72 @@ function extractYouPassParts(data) {
   }
 
   return rawParts ? [rawParts] : [];
+}
+
+function cleanQuizTitle(title) {
+  return String(title || '').replace(/^\[[^\]]+\]\s*-\s*/, '').trim();
+}
+
+function splitPassageContent(part, data) {
+  const contentLines = splitTextLines(htmlToText(part.content));
+  const vocabLines = extractVocabPassageLines(part.vocabs);
+  const passageLines = contentLines.length > 0 ? contentLines : vocabLines;
+  const fallbackTitle = part.title || cleanQuizTitle(data?.title);
+
+  if (passageLines.length === 0) {
+    return { title: fallbackTitle, bodyLines: [] };
+  }
+
+  const firstLine = passageLines[0];
+  const firstLineLooksLikeTitle = contentLines.length > 0
+    && firstLine.length <= 90
+    && !/[.!?]$/.test(firstLine)
+    && !/^[A-Z]\.\s/.test(firstLine);
+
+  if (firstLineLooksLikeTitle) {
+    return {
+      title: firstLine,
+      bodyLines: passageLines.slice(1)
+    };
+  }
+
+  return {
+    title: fallbackTitle,
+    bodyLines: passageLines
+  };
+}
+
+function extractVocabPassageLines(vocabs) {
+  if (!Array.isArray(vocabs)) {
+    return [];
+  }
+
+  return vocabs
+    .map((group) => (group.children || [])
+      .map((child) => htmlToText(child.value))
+      .filter(Boolean)
+      .join(' '))
+    .filter(Boolean);
+}
+
+function getPartQuestions(part) {
+  if (Array.isArray(part.questions) && part.questions.length > 0) {
+    return part.questions;
+  }
+
+  if (!Array.isArray(part.question_sets)) {
+    return [];
+  }
+
+  return part.question_sets.flatMap((questionSet) => (questionSet.questions || []).map((question, index) => ({
+    ...question,
+    question_type: question.question_type || questionSet.question_type,
+    description: index === 0
+      ? [questionSet.title, htmlToText(questionSet.description)].filter(Boolean).join('<br>')
+      : question.description,
+    shared_options: Array.isArray(questionSet.options) && questionSet.options.length > 0 ? questionSet.options : null,
+    shared_option_group_key: questionSet.id || questionSet.title || question.question_set_id || ''
+  })));
 }
 
 function extractMarkedAnswers(html) {
@@ -321,6 +507,43 @@ function formatSelectionQuestion(question) {
     questionText: htmlToText(item.text),
     answer: htmlToText(item.answer)
   }));
+}
+
+function formatChoiceOptions(question) {
+  return (question.options || []).map((option) => ({
+    option: htmlToText(option.option),
+    text: htmlToText(option.text),
+    correct: Boolean(option.is_correct)
+  }));
+}
+
+function formatSharedOptions(question) {
+  return (question.shared_options || []).map((option) => ({
+    option: htmlToText(option.option),
+    text: htmlToText(option.text),
+    correct: false
+  }));
+}
+
+function formatOptionText(option) {
+  if (!option.option) {
+    return option.text;
+  }
+
+  const text = option.text.replaceAll(/\s+/g, ' ').trim();
+  const optionPattern = new RegExp(`^${option.option}\\b[.)]?\\s*`, 'i');
+
+  if (optionPattern.test(text)) {
+    return text.replace(optionPattern, `${option.option}. `);
+  }
+
+  return `${option.option}. ${text}`;
+}
+
+function getChoiceAnswer(question, choiceOptions) {
+  return htmlToText(question.correct_answer)
+    || choiceOptions.find((option) => option.correct)?.option
+    || '';
 }
 
 function isFillInTheBlankQuestion(question) {
@@ -408,33 +631,121 @@ function formatQuestionGroupLines(question, answers) {
   return [`Questions ${orderRange}: ${typeLabel}`];
 }
 
+function extractMarkedExplanations(html) {
+  const explanations = new Map();
+  const source = String(html || '');
+  const markerPattern = /\]\[([^\]]+)\]\}/g;
+  let cursor = 0;
+  let match;
+
+  while ((match = markerPattern.exec(source)) !== null) {
+    const order = htmlToText(match[1]);
+    const chunk = source
+      .slice(cursor, match.index)
+      .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
+      .replace(/^\s*(\{\[|\{\{)\s*/i, '');
+    const explanation = htmlToText(chunk);
+
+    if (order && explanation) {
+      explanations.set(String(order), explanation);
+    }
+
+    cursor = markerPattern.lastIndex;
+  }
+
+  return explanations;
+}
+
+function buildExplanationMap(questions) {
+  const explanations = new Map();
+
+  for (const question of questions) {
+    const markedExplanations = extractMarkedExplanations(question.explain);
+    markedExplanations.forEach((explanation, order) => {
+      explanations.set(String(order), explanation);
+    });
+
+    const explanation = htmlToText(question.explain);
+    if (markedExplanations.size === 0 && question.order && explanation) {
+      explanations.set(String(question.order), explanation);
+    }
+  }
+
+  return explanations;
+}
+
+function addExplanationLines(lines, question, order, explanationsByOrder) {
+  const explanation = (order && explanationsByOrder.get(String(order))) || htmlToText(question.explain);
+  const explanationLines = splitTextLines(explanation);
+  const formattedLines = [{ text: 'Giải thích:' }];
+  let stepCount = 0;
+
+  explanationLines.forEach((line) => {
+    const stepMatch = line.match(/^(Bước\s+\d+\s*:)\s*(.*)$/i);
+
+    if (stepMatch) {
+      stepCount += 1;
+      if (stepCount > 1) {
+        formattedLines.push({ text: '', spacer: true });
+      }
+      formattedLines.push({ text: stepMatch[1] });
+      if (stepMatch[2]) {
+        formattedLines.push({ text: stepMatch[2] });
+      }
+      return;
+    }
+
+    formattedLines.push({ text: line });
+  });
+
+  formattedLines.forEach((line, index) => {
+    lines.push({
+      type: 'explanation',
+      text: line.text,
+      spacer: line.spacer,
+      boxPosition: formattedLines.length === 1
+        ? 'single'
+        : index === 0
+          ? 'first'
+          : index === formattedLines.length - 1
+            ? 'last'
+            : 'middle'
+    });
+  });
+}
+
 export function formatYouPassResult(result) {
   const data = result?.data ?? result;
   const parts = extractYouPassParts(data);
   const lines = [];
 
-  if (data?.title) {
-    lines.push({ type: 'heading', text: data.title });
-  }
+  lines.push({ type: 'readingTestTitle', text: 'Test 1' });
 
   if (data?.instruction) {
     lines.push({ type: 'heading', text: 'Instruction' });
     splitTextLines(htmlToText(data.instruction)).forEach((line) => lines.push({ type: 'text', text: line }));
   }
 
-  for (const part of parts) {
-    lines.push({ type: 'heading', text: part.title || `Part ${part.sort || part.passage || ''}`.trim() });
+  parts.forEach((part, partIndex) => {
+    const passageNumber = part.passage || part.sort || partIndex + 1;
+    lines.push({ type: 'passageLabel', text: `PASSAGE ${passageNumber}` });
 
-    if (part.content) {
-      lines.push({ type: 'heading', text: 'Passage' });
-      splitTextLines(htmlToText(part.content)).forEach((line) => lines.push({ type: 'text', text: line }));
+    const passage = splitPassageContent(part, data);
+    if (passage.title || passage.bodyLines.length > 0) {
+      if (passage.title) {
+        lines.push({ type: 'passageTitle', text: passage.title });
+      }
+      passage.bodyLines.forEach((line) => lines.push({ type: 'passageText', text: line }));
     }
 
-    if (Array.isArray(part.questions) && part.questions.length > 0) {
+    const partQuestions = getPartQuestions(part);
+    if (partQuestions.length > 0) {
       lines.push({ type: 'heading', text: 'Questions and answers' });
       const emittedQuestionOrders = new Set();
+      const emittedSharedOptionGroups = new Set();
+      const explanationsByOrder = buildExplanationMap(partQuestions);
 
-      for (const question of part.questions) {
+      for (const question of partQuestions) {
         if (isFillInTheBlankQuestion(question)) {
           const answers = extractMarkedAnswers(question.gap_fill_in_blank);
 
@@ -446,7 +757,12 @@ export function formatYouPassResult(result) {
           });
 
           splitTextLines(htmlToTextWithBlankPlaceholders(question.gap_fill_in_blank))
-            .forEach((line) => lines.push({ type: 'text', text: line }));
+            .forEach((line, lineIndex) => {
+              lines.push({
+                type: lineIndex === 0 ? 'passageTitle' : 'passageText',
+                text: line
+              });
+            });
 
           answers.forEach((answer) => {
             const order = answer.order || question.order;
@@ -456,8 +772,9 @@ export function formatYouPassResult(result) {
 
             lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
             if (answer.answer) {
-              lines.push({ type: 'text', text: `A: ${answer.answer}` });
+              lines.push({ type: 'answer', text: `A: ${answer.answer}` });
             }
+            addExplanationLines(lines, question, order, explanationsByOrder);
             if (order) {
               emittedQuestionOrders.add(String(order));
             }
@@ -471,11 +788,55 @@ export function formatYouPassResult(result) {
         const rawAnswers = markedAnswers.length > 0 ? markedAnswers : selectionAnswers;
         const answers = rawAnswers.filter((answer) => !answer.order || !emittedQuestionOrders.has(String(answer.order)));
         const fallback = htmlToText(question.text || question.content || question.title);
+        const choiceOptions = formatChoiceOptions(question);
+        const sharedOptions = formatSharedOptions(question);
+        const choiceAnswer = getChoiceAnswer(question, choiceOptions);
+
+        if (answers.length === 0 && choiceOptions.length > 0) {
+          if (!emittedQuestionOrders.has(String(question.order))) {
+            formatQuestionGroupLines(question, [{ order: question.order }]).forEach((line) => {
+              lines.push({
+                type: /^Questions?\s+\d/i.test(line) ? 'questionGroup' : 'text',
+                text: line
+              });
+            });
+            if (sharedOptions.length > 0 && !emittedSharedOptionGroups.has(String(question.shared_option_group_key))) {
+              sharedOptions.forEach((option) => {
+                lines.push({
+                  type: 'choice',
+                  text: formatOptionText(option),
+                  correct: false
+                });
+              });
+              emittedSharedOptionGroups.add(String(question.shared_option_group_key));
+            }
+            lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
+            if (fallback) {
+              lines.push({ type: 'text', text: `Q: ${fallback}` });
+            }
+            if (sharedOptions.length === 0) {
+              choiceOptions.forEach((option) => {
+                lines.push({
+                  type: 'choice',
+                  text: formatOptionText(option),
+                  correct: option.correct || option.option === choiceAnswer
+                });
+              });
+            }
+            if (choiceAnswer) {
+              lines.push({ type: 'answer', text: `A: ${choiceAnswer}` });
+            }
+            addExplanationLines(lines, question, question.order, explanationsByOrder);
+            emittedQuestionOrders.add(String(question.order));
+          }
+          continue;
+        }
 
         if (answers.length === 0) {
           if (fallback && !emittedQuestionOrders.has(String(question.order))) {
             lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
             lines.push({ type: 'text', text: `Q: ${fallback}` });
+            addExplanationLines(lines, question, question.order, explanationsByOrder);
           }
           continue;
         }
@@ -492,15 +853,16 @@ export function formatYouPassResult(result) {
           lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
           lines.push({ type: 'text', text: `Q: ${answer.questionText}` });
           if (answer.answer) {
-            lines.push({ type: 'text', text: `A: ${answer.answer}` });
+            lines.push({ type: 'answer', text: `A: ${answer.answer}` });
           }
+          addExplanationLines(lines, question, order, explanationsByOrder);
           if (order) {
             emittedQuestionOrders.add(String(order));
           }
         });
       }
     }
-  }
+  });
 
   if (lines.length > 0) {
     return lines;
@@ -541,6 +903,34 @@ export function createDocx({ id, result }) {
 
           if (line.type === 'questionTitle') {
             return questionTitle(line.text);
+          }
+
+          if (line.type === 'readingTestTitle') {
+            return readingTestTitle(line.text);
+          }
+
+          if (line.type === 'passageLabel') {
+            return passageLabel(line.text);
+          }
+
+          if (line.type === 'passageTitle') {
+            return passageTitle(line.text);
+          }
+
+          if (line.type === 'passageText') {
+            return passageParagraph(line.text);
+          }
+
+          if (line.type === 'explanation') {
+            return explanationParagraph(line);
+          }
+
+          if (line.type === 'answer') {
+            return answerParagraph(line.text);
+          }
+
+          if (line.type === 'choice') {
+            return choiceParagraph(line);
           }
 
           return paragraph(line.text);
