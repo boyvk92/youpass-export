@@ -336,11 +336,17 @@ function choiceParagraph(line) {
   return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
 }
 
+function questionInfoParagraph(text) {
+  return styledParagraph(text, { color: '555555', size: '22', before: '20', after: '20' });
+}
+
 function runXml(text, options = {}) {
-  const { bold = false, color = '', size = '' } = options;
+  const { bold = false, color = '', italic = false, size = '', underline = false } = options;
   const runProps = [
     bold ? '<w:b/>' : '',
     color ? `<w:color w:val="${color}"/>` : '',
+    italic ? '<w:i/>' : '',
+    underline ? '<w:u w:val="single"/>' : '',
     size ? `<w:sz w:val="${size}"/>` : ''
   ].join('');
 
@@ -385,6 +391,138 @@ function explanationParagraph(line) {
       : explanationRuns(text);
 
   return `<w:p><w:pPr>${spacing}<w:pBdr>${borders}</w:pBdr>${shading}</w:pPr>${content}</w:p>`;
+}
+
+function borderedParagraph(runs, options = {}) {
+  const { top = true, bottom = true, shading = '', before = '0', after = '0' } = options;
+  const borders = [
+    top ? '<w:top w:val="single" w:sz="12" w:space="1" w:color="000000"/>' : '',
+    '<w:left w:val="single" w:sz="12" w:space="4" w:color="000000"/>',
+    '<w:right w:val="single" w:sz="12" w:space="4" w:color="000000"/>',
+    bottom ? '<w:bottom w:val="single" w:sz="12" w:space="1" w:color="000000"/>' : ''
+  ].join('');
+  const paragraphShading = shading ? `<w:shd w:fill="${shading}"/>` : '';
+
+  return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/><w:pBdr>${borders}</w:pBdr>${paragraphShading}</w:pPr>${runs}</w:p>`;
+}
+
+function tableCell(runs, options = {}) {
+  const { width = 2500, bold = false, gridSpan = 1 } = options;
+  const contentRuns = bold ? runXml(runs, { bold: true, size: '24' }) : runs;
+  const span = gridSpan > 1 ? `<w:gridSpan w:val="${gridSpan}"/>` : '';
+
+  return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="pct"/>${span}</w:tcPr><w:p>${contentRuns}</w:p></w:tc>`;
+}
+
+function lineBreakXml() {
+  return '<w:r><w:br/></w:r>';
+}
+
+function questionCellRuns(block) {
+  const runs = [runXml(block.questionText || '', { size: '24' })];
+
+  if (Array.isArray(block.choices) && block.choices.length > 0) {
+    block.choices.forEach((choice) => {
+      runs.push(lineBreakXml());
+      runs.push(runXml(formatOptionText(choice), {
+        color: choice.correct ? 'FF0000' : '',
+        size: '24'
+      }));
+    });
+  }
+
+  return runs.join('');
+}
+
+function explanationCellRuns(explanationLines) {
+  const runs = [runXml('Explanation: ', { italic: true, underline: true, size: '24' })];
+  let stepCount = 0;
+
+  explanationLines.forEach((line) => {
+    const stepMatch = line.match(/^(Bước\s+\d+\s*:)\s*(.*)$/i);
+
+    if (stepMatch) {
+      stepCount += 1;
+      if (stepCount > 1) {
+        runs.push(lineBreakXml());
+      }
+      runs.push(lineBreakXml());
+      runs.push(runXml(stepMatch[1], { bold: true, size: '24' }));
+      if (stepMatch[2]) {
+        runs.push(lineBreakXml());
+        runs.push(runXml(stepMatch[2], { size: '24' }));
+      }
+      return;
+    }
+
+    runs.push(lineBreakXml());
+    runs.push(runXml(line, { size: '24' }));
+  });
+
+  return runs.join('');
+}
+
+function explanationFullTable(block) {
+  const title = `QUESTION ${block.order || ''}${block.answer ? ` - ${block.answer}` : ''}`.trim();
+  const keywords = block.keywords.length > 0 ? block.keywords.join(', ') : '';
+
+  return `<w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="5000" w:type="pct"/>
+      <w:tblLayout w:type="fixed"/>
+      <w:tblBorders>
+        <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+        <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+        <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+        <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+        <w:insideH w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+        <w:insideV w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+      </w:tblBorders>
+    </w:tblPr>
+    <w:tblGrid>
+      <w:gridCol w:w="2700"/>
+      <w:gridCol w:w="6300"/>
+    </w:tblGrid>
+    <w:tr>
+      ${tableCell(runXml(title, { bold: true, size: '28' }), { width: 5000, gridSpan: 2 })}
+    </w:tr>
+    <w:tr>
+      ${tableCell([
+        runXml('Type: ', { bold: true, size: '24' }),
+        runXml(block.questionType || '', { size: '24' })
+      ].join(''), { width: 5000, gridSpan: 2 })}
+    </w:tr>
+    <w:tr>
+      ${tableCell([
+        runXml('Keywords: ', { bold: true, size: '24' }),
+        runXml(keywords, { size: '24' })
+      ].join(''), { width: 5000, gridSpan: 2 })}
+    </w:tr>
+    <w:tr>
+      ${tableCell('QUESTION', { bold: true, width: 1500 })}
+      ${tableCell('AREA OF INFORMATION', { bold: true, width: 3500 })}
+    </w:tr>
+    <w:tr>
+      ${tableCell(questionCellRuns(block), { width: 1500 })}
+      ${tableCell(runXml(block.areaOfInformation || '', { size: '24' }), { width: 3500 })}
+    </w:tr>
+    <w:tr>
+      ${tableCell(explanationCellRuns(block.explanationLines), { width: 5000, gridSpan: 2 })}
+    </w:tr>
+  </w:tbl>`;
+}
+
+function explanationBlock(block) {
+  return [
+    styledParagraph('Giải thích đáp án', {
+      bold: true,
+      color: '003366',
+      size: '30',
+      before: '240',
+      after: '160'
+    }).replace('<w:pPr>', '<w:pPr><w:shd w:fill="FFFF00"/>'),
+    explanationFullTable(block)
+  ].join('');
 }
 
 function heading(text) {
@@ -546,9 +684,22 @@ function getChoiceAnswer(question, choiceOptions) {
     || '';
 }
 
+function getDirectAnswer(question) {
+  const correctAnswer = htmlToText(question.correct_answer);
+  if (correctAnswer) {
+    return correctAnswer;
+  }
+
+  if (Array.isArray(question.correct_answers) && question.correct_answers.length > 0) {
+    return question.correct_answers.map(htmlToText).filter(Boolean).join(' | ');
+  }
+
+  return '';
+}
+
 function isFillInTheBlankQuestion(question) {
   return normalizeTypeKey(question.type) === 'FILL_IN_THE_BLANK'
-    || normalizeTypeKey(question.question_type) === 'FILL_BLANK';
+    || (normalizeTypeKey(question.question_type) === 'FILL_BLANK' && Boolean(question.gap_fill_in_blank));
 }
 
 function normalizeTypeKey(value) {
@@ -674,44 +825,92 @@ function buildExplanationMap(questions) {
   return explanations;
 }
 
-function addExplanationLines(lines, question, order, explanationsByOrder) {
+function addExplanationLines(lines, question, order, explanationsByOrder, details = {}) {
   const explanation = (order && explanationsByOrder.get(String(order))) || htmlToText(question.explain);
   const explanationLines = splitTextLines(explanation);
-  const formattedLines = [{ text: 'Giải thích:' }];
-  let stepCount = 0;
+  const answer = htmlToText(details.answer);
 
-  explanationLines.forEach((line) => {
-    const stepMatch = line.match(/^(Bước\s+\d+\s*:)\s*(.*)$/i);
+  if (!answer && explanationLines.length === 0) {
+    return;
+  }
 
-    if (stepMatch) {
-      stepCount += 1;
-      if (stepCount > 1) {
-        formattedLines.push({ text: '', spacer: true });
-      }
-      formattedLines.push({ text: stepMatch[1] });
-      if (stepMatch[2]) {
-        formattedLines.push({ text: stepMatch[2] });
-      }
-      return;
+  lines.push({
+    type: 'explanationBlock',
+    order,
+    answer,
+    questionType: getQuestionTypeLabel(question),
+    questionText: details.questionText || htmlToText(question.text || question.content || question.title),
+    choices: details.choices || [],
+    areaOfInformation: formatAreaOfInformation(question),
+    keywords: extractQuestionKeywords(question),
+    explanationLines
+  });
+}
+
+function formatAreaOfInformation(question) {
+  const ranges = question.locate_info?.paragraph_ranges;
+  if (!Array.isArray(ranges) || ranges.length === 0) {
+    return '';
+  }
+
+  return ranges.map((range) => {
+    const start = range.start || {};
+    const end = range.end || {};
+    const paragraph = start.paragraph && end.paragraph && start.paragraph !== end.paragraph
+      ? `Paragraphs ${start.paragraph}-${end.paragraph}`
+      : `Paragraph ${start.paragraph || end.paragraph}`;
+    const sentence = start.sentence && end.sentence && start.sentence !== end.sentence
+      ? `sentences ${start.sentence}-${end.sentence}`
+      : start.sentence || end.sentence
+        ? `sentence ${start.sentence || end.sentence}`
+        : '';
+
+    return [paragraph, sentence].filter(Boolean).join(', ');
+  }).filter(Boolean).join('; ');
+}
+
+function extractQuestionKeywords(question) {
+  const explanationLines = splitTextLines(htmlToText(question.explain));
+  const keywords = [];
+  let collecting = false;
+
+  for (const line of explanationLines) {
+    if (/^Bước\s+\d+\s*:/i.test(line) && collecting) {
+      break;
     }
 
-    formattedLines.push({ text: line });
-  });
+    if (/keywords?/i.test(line)) {
+      collecting = true;
+      continue;
+    }
 
-  formattedLines.forEach((line, index) => {
-    lines.push({
-      type: 'explanation',
-      text: line.text,
-      spacer: line.spacer,
-      boxPosition: formattedLines.length === 1
-        ? 'single'
-        : index === 0
-          ? 'first'
-          : index === formattedLines.length - 1
-            ? 'last'
-            : 'middle'
+    if (!collecting) {
+      continue;
+    }
+
+    const cleanedLine = line.replace(/^[-•]\s*/, '').trim();
+    if (cleanedLine && !/^Bước\s+\d+\s*:/i.test(cleanedLine)) {
+      keywords.push(cleanedLine);
+    }
+  }
+
+  return keywords;
+}
+
+function addQuestionInfoLines(lines, question) {
+  const areaOfInformation = formatAreaOfInformation(question);
+  const keywords = extractQuestionKeywords(question);
+
+  if (areaOfInformation) {
+    lines.push({ type: 'questionInfo', text: `AREA OF INFORMATION: ${areaOfInformation}` });
+  }
+
+  if (keywords.length > 0) {
+    lines.push({ type: 'questionInfo', text: 'Keywords:' });
+    keywords.forEach((keyword) => {
+      lines.push({ type: 'questionInfo', text: `- ${keyword}` });
     });
-  });
+  }
 }
 
 export function formatYouPassResult(result) {
@@ -771,10 +970,8 @@ export function formatYouPassResult(result) {
             }
 
             lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
-            if (answer.answer) {
-              lines.push({ type: 'answer', text: `A: ${answer.answer}` });
-            }
-            addExplanationLines(lines, question, order, explanationsByOrder);
+            addQuestionInfoLines(lines, question);
+            addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer });
             if (order) {
               emittedQuestionOrders.add(String(order));
             }
@@ -813,6 +1010,7 @@ export function formatYouPassResult(result) {
             lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
             if (fallback) {
               lines.push({ type: 'text', text: `Q: ${fallback}` });
+              addQuestionInfoLines(lines, question);
             }
             if (sharedOptions.length === 0) {
               choiceOptions.forEach((option) => {
@@ -823,10 +1021,14 @@ export function formatYouPassResult(result) {
                 });
               });
             }
-            if (choiceAnswer) {
-              lines.push({ type: 'answer', text: `A: ${choiceAnswer}` });
-            }
-            addExplanationLines(lines, question, question.order, explanationsByOrder);
+            addExplanationLines(lines, question, question.order, explanationsByOrder, {
+              answer: choiceAnswer,
+              questionText: fallback,
+              choices: choiceOptions.map((option) => ({
+                ...option,
+                correct: option.correct || option.option === choiceAnswer
+              }))
+            });
             emittedQuestionOrders.add(String(question.order));
           }
           continue;
@@ -834,9 +1036,21 @@ export function formatYouPassResult(result) {
 
         if (answers.length === 0) {
           if (fallback && !emittedQuestionOrders.has(String(question.order))) {
+            formatQuestionGroupLines(question, [{ order: question.order }]).forEach((line) => {
+              lines.push({
+                type: /^Questions?\s+\d/i.test(line) ? 'questionGroup' : 'text',
+                text: line
+              });
+            });
             lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
             lines.push({ type: 'text', text: `Q: ${fallback}` });
-            addExplanationLines(lines, question, question.order, explanationsByOrder);
+            addQuestionInfoLines(lines, question);
+            const directAnswer = getDirectAnswer(question);
+            addExplanationLines(lines, question, question.order, explanationsByOrder, {
+              answer: directAnswer,
+              questionText: fallback
+            });
+            emittedQuestionOrders.add(String(question.order));
           }
           continue;
         }
@@ -852,10 +1066,11 @@ export function formatYouPassResult(result) {
           const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
           lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
           lines.push({ type: 'text', text: `Q: ${answer.questionText}` });
-          if (answer.answer) {
-            lines.push({ type: 'answer', text: `A: ${answer.answer}` });
-          }
-          addExplanationLines(lines, question, order, explanationsByOrder);
+          addQuestionInfoLines(lines, question);
+          addExplanationLines(lines, question, order, explanationsByOrder, {
+            answer: answer.answer,
+            questionText: answer.questionText
+          });
           if (order) {
             emittedQuestionOrders.add(String(order));
           }
@@ -925,12 +1140,20 @@ export function createDocx({ id, result }) {
             return explanationParagraph(line);
           }
 
+          if (line.type === 'explanationBlock') {
+            return explanationBlock(line);
+          }
+
           if (line.type === 'answer') {
             return answerParagraph(line.text);
           }
 
           if (line.type === 'choice') {
             return choiceParagraph(line);
+          }
+
+          if (line.type === 'questionInfo') {
+            return questionInfoParagraph(line.text);
           }
 
           return paragraph(line.text);
