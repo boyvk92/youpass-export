@@ -764,7 +764,7 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
 
   const normalizedChoiceMap = new Map(
     Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
-      .map(([key, value]) => [String(key).trim().toUpperCase(), String(value ?? '').trim()])
+      .map(([key, value]) => [normalizeChoiceLabel(key), String(value ?? '').trim()])
       .filter(([, value]) => Boolean(value))
   );
 
@@ -795,11 +795,10 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
 
   const replaceAnswerRefs = (htmlText) => {
     const output = decodeHtmlEntities(String(htmlText ?? ''));
-    const wrapPattern = /(?:Đáp\s*án|Answer|Câu)\s*[:.\-]?\s*<\s*(?:strong|b)\s*>\s*([A-Z])\s*<\s*\/\s*(?:strong|b)\s*>/gi;
-    const plainPattern = /(?:Đáp\s*án|Answer|Câu)\s*[:.\-]?\s*([A-Z])\b/gi;
-
+    const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
+    const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
     const replaceWithChoice = (match, key) => {
-      const choiceText = normalizedChoiceMap.get(String(key).trim().toUpperCase());
+      const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(key));
       if (!choiceText) {
         return match;
       }
@@ -811,9 +810,21 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
       return `Đáp án "<strong>${escapeHtml(displayText)}</strong>"`;
     };
 
-    return output
-      .replace(wrapPattern, replaceWithChoice)
-      .replace(plainPattern, replaceWithChoice);
+    let replaced = output;
+    const keys = Array.from(normalizedChoiceMap.keys()).sort((a, b) => b.length - a.length);
+    for (const key of keys) {
+      const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      replaced = replaced.replace(
+        new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${strongTagPattern}${safeKey}${strongClosePattern}`, 'gi'),
+        (match) => replaceWithChoice(match, key)
+      );
+      replaced = replaced.replace(
+        new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${safeKey}\\b`, 'gi'),
+        (match) => replaceWithChoice(match, key)
+      );
+    }
+
+    return replaced;
   };
 
   const answerBlockPatterns = [
@@ -826,17 +837,17 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
     normalizedHtml = normalizedHtml.replace(pattern, (match, inner) => {
       const text = htmlToText(inner ?? match).trim();
       const normalized = text.toUpperCase();
-      const choiceText = normalizedChoiceMap.get(normalized);
-      const isManyChoiceLetter = rawTypeKey === 'MULTIPLE_CHOICE_MANY' ? /^[A-Z]$/.test(normalized) : /^[A-D]$/.test(normalized);
+      const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(normalized));
 
-      if (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && isManyChoiceLetter && choiceText) {
+      if (choiceText) {
         return match.replace(
           inner,
           `<strong>${escapeHtml(choiceText.length > 70 ? `${choiceText.slice(0, 67).trimEnd()}...` : choiceText)}</strong>`
         );
       }
 
-      if (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && isManyChoiceLetter) {
+      const isTokenLike = /^[A-Z0-9IVXLCDM]+$/.test(normalized);
+      if (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && isTokenLike) {
         return match;
       }
 
@@ -857,7 +868,7 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
         }
       }
 
-      if (/^\d+$/.test(text) || /^[A-D]$/.test(normalized) || isStandaloneAnswerText(text)) {
+      if (/^\d+$/.test(text) || isTokenLike || isStandaloneAnswerText(text)) {
         return '';
       }
       return match;
@@ -875,10 +886,12 @@ function replaceAnswerRefsInXml(xml, answerTextMap = new Map()) {
   );
 
   let output = String(xml ?? '');
+  const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
+  const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
   normalizedChoiceMap.forEach((choiceText, choiceKey) => {
-    const replacement = `Đáp án ${escapeXml(choiceText)}`;
+    const replacement = `Đáp án &quot;${escapeXml(choiceText)}&quot;`;
     output = output.replace(
-      new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*<\\s*(?:strong|b)\\s*>\\s*${choiceKey}\\s*<\\s*\\/\\s*(?:strong|b)\\s*>`, 'gi'),
+      new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${strongTagPattern}${choiceKey}${strongClosePattern}`, 'gi'),
       replacement
     );
     output = output.replace(
@@ -921,7 +934,8 @@ function questionExplanationBlock(explanationHtml = '', answerTokens = [], answe
     return '';
   }
 
-  const body = htmlToDocxParagraphs(source, { size: '24' });
+  const normalizedSource = replaceAnswerRefsInXml(source, answerTextMap);
+  const body = htmlToDocxParagraphs(normalizedSource, { size: '24' });
   return `<w:tbl>
     <w:tblPr>
       <w:tblW w:w="5000" w:type="pct"/>
@@ -1175,8 +1189,22 @@ function formatChoiceOptions(question) {
   }));
 }
 
+function normalizeChoiceLabel(value) {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    return '';
+  }
+
+  if (/^[a-z]+$/i.test(text)) {
+    return text.toUpperCase();
+  }
+
+  return text;
+}
+
 function formatMultipleChoiceManyOptions(question) {
   const candidates = [
+    question.selection_option,
     question.multiple_choice,
     question.mutilple_choice,
     question.multipleChoice,
@@ -1207,11 +1235,11 @@ function formatMultipleChoiceManyOptions(question) {
         return [];
       }
 
-      const label = htmlToText(item.option ?? item.key ?? item.label ?? item.letter ?? item.answer ?? '');
+      const label = normalizeChoiceLabel(htmlToText(item.option ?? item.key ?? item.label ?? item.letter ?? item.answer ?? ''));
       const text = htmlToText(item.text ?? item.value ?? item.content ?? item.description ?? item.title ?? '');
       const correct = Boolean(item.correct || item.is_correct || item.isCorrect || item.answer === true);
       return [{
-        option: /^[A-E]$/i.test(label) ? label.toUpperCase() : String.fromCharCode(65 + index),
+        option: label || String.fromCharCode(65 + index),
         text: text || label,
         correct
       }];
@@ -1286,10 +1314,10 @@ function labelIndexedOptions(options = []) {
 
 function formatOptionText(option) {
   if (!option.option) {
-    return option.text;
+    return String(option.text ?? '');
   }
 
-  const text = option.text.replaceAll(/\s+/g, ' ').trim();
+  const text = String(option.text ?? '').replaceAll(/\s+/g, ' ').trim();
   const optionPattern = new RegExp(`^${option.option}\\b[.)]?\\s*`, 'i');
 
   if (optionPattern.test(text)) {
@@ -1545,18 +1573,52 @@ function collectQuestionChoiceTextMap(details = {}) {
     }
 
     const rawValue = String(choice.text ?? choice.displayText ?? '').trim();
-    const value = rawValue.replace(/^[A-Z]\s*[.)]\s*/i, '').trim();
+    const value = rawValue.replace(/^[A-Z0-9IVXLCDM]+\s*[.)]\s*/i, '').trim();
     const fallbackKey = String.fromCharCode(65 + index);
-    const rawKey = String(choice.option ?? choice.key ?? choice.label ?? '').trim().toUpperCase();
-    const key = /^[A-Z]$/.test(rawKey) ? rawKey : fallbackKey;
+    const rawKey = normalizeChoiceLabel(choice.option ?? choice.key ?? choice.label ?? '');
+    const key = rawKey || fallbackKey;
 
     if (key && value) {
       map.set(key, value);
-      if (/^[A-D]$/.test(rawKey) && rawKey !== key) {
+      if (rawKey && rawKey !== key) {
         map.set(rawKey, value);
       }
     }
   });
+
+  return map;
+}
+
+function collectGroupChoiceTextMap(question = {}) {
+  const map = new Map();
+  const lines = [];
+
+  if (Array.isArray(question.group?.description)) {
+    lines.push(...question.group.description);
+  }
+
+  const descriptionHtml = String(question.description ?? question.group?.html ?? question.group?.descriptionHtml ?? '').trim();
+  if (descriptionHtml) {
+    splitTextLines(htmlToText(descriptionHtml)).forEach((line) => lines.push(line));
+  }
+
+  for (const line of lines) {
+    const text = htmlToText(line).replace(/\u00a0/g, ' ').trim();
+    if (!text) {
+      continue;
+    }
+
+    const match = text.match(/^((?:[A-Za-z])|(?:\d+)|(?:[ivxlcdm]{1,6}))\b(?:\s*[.)\-:]?\s+|\s+)(.+)$/i);
+    if (!match) {
+      continue;
+    }
+
+    const key = normalizeChoiceLabel(match[1]);
+    const value = String(match[2] ?? '').trim();
+    if (key && value && !/^questions?\b/i.test(text)) {
+      map.set(key, value);
+    }
+  }
 
   return map;
 }
@@ -1568,7 +1630,10 @@ function addExplanationLines(lines, question, order, explanationsByOrder, detail
 
   const rawTypeKey = getQuestionRawTypeKey(question);
   const answerTokens = collectQuestionAnswerTokens(question, details);
-  const choiceTextMap = collectQuestionChoiceTextMap(details);
+  const choiceTextMap = new Map([
+    ...collectGroupChoiceTextMap(question).entries(),
+    ...collectQuestionChoiceTextMap(details).entries()
+  ]);
   const explanationHtml = normalizeExplanationHtml(
     (order && explanationsByOrder.get(String(order))) || question.explain,
     answerTokens,
@@ -1824,6 +1889,16 @@ export function formatYouPassResult(result, quizTypeOverride) {
 
         pushQuestionGroupLines(lines, question, answers);
 
+        if (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && !emittedQuestionOrders.has(String(question.order))) {
+          renderedChoiceOptions.forEach((option) => {
+            lines.push({
+              type: 'choice',
+              text: formatOptionText(option),
+              correct: option.correct
+            });
+          });
+        }
+
         answers.forEach((answer, index) => {
           const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
           lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
@@ -1836,7 +1911,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
                 correct: option.correct || option.option === choiceAnswer
               });
             });
-          } else {
+          } else if (rawTypeKey !== 'MULTIPLE_CHOICE_MANY') {
             pushSharedOptions(lines, sharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
           }
           addExplanationLines(lines, question, order, explanationsByOrder, {
