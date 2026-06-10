@@ -254,6 +254,11 @@ function htmlToTextWithBlankPlaceholders(value) {
     .trim();
 }
 
+function htmlWithBlankPlaceholders(value) {
+  return String(value ?? '')
+    .replaceAll(/\{\[[\s\S]*?\]\[([^\]]+)\]\}/g, (_match, order) => `[__${htmlToText(order)}__]`);
+}
+
 function splitTextLines(value) {
   return String(value ?? '')
     .split('\n')
@@ -361,6 +366,21 @@ function createZip(files) {
   return Buffer.concat([...localParts, centralDirectory, endRecord]);
 }
 
+function extractImageOnlyHtml(source) {
+  const html = String(source ?? '');
+  const wrappedImageBlocks = [...html.matchAll(/<p\b[^>]*>[\s\S]*?<img\b[\s\S]*?<\/p>/gi)].map((match) => match[0]);
+  if (wrappedImageBlocks.length > 0) {
+    return wrappedImageBlocks.join('');
+  }
+
+  const standaloneImages = [...html.matchAll(/<img\b[^>]*>/gi)].map((match) => `<p>${match[0]}</p>`);
+  if (standaloneImages.length > 0) {
+    return standaloneImages.join('');
+  }
+
+  return html;
+}
+
 function paragraph(text) {
   return `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
@@ -396,6 +416,253 @@ function passageParagraph(text) {
   return styledParagraph(text, { size: '26', before: '80', after: '80' });
 }
 
+function emuToPx(value) {
+  return Number(value || 0) / 9525;
+}
+
+function pxToEmu(value) {
+  return Math.max(1, Math.round(Number(value || 0) * 9525));
+}
+
+function escapeXmlAttr(value) {
+  return escapeXml(value).replaceAll('`', '&apos;');
+}
+
+function parseImageAttributes(tag) {
+  const source = String(tag ?? '');
+  const attrs = {};
+  for (const match of source.matchAll(/([a-zA-Z_:][\w:.-]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+    attrs[match[1].toLowerCase()] = decodeHtmlEntities(match[3]);
+  }
+  return attrs;
+}
+
+function guessImageExtensionFromMimeType(mimeType = '') {
+  const value = String(mimeType || '').toLowerCase();
+  if (value.includes('png')) return 'png';
+  if (value.includes('jpeg') || value.includes('jpg')) return 'jpg';
+  if (value.includes('gif')) return 'gif';
+  if (value.includes('webp')) return 'webp';
+  if (value.includes('bmp')) return 'bmp';
+  return '';
+}
+
+function guessImageExtensionFromUrl(src = '') {
+  const clean = String(src || '').split('?')[0].split('#')[0].toLowerCase();
+  if (clean.endsWith('.png')) return 'png';
+  if (clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'jpg';
+  if (clean.endsWith('.gif')) return 'gif';
+  if (clean.endsWith('.webp')) return 'webp';
+  if (clean.endsWith('.bmp')) return 'bmp';
+  return '';
+}
+
+function parsePngDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null;
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20)
+  };
+}
+
+function parseGifDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 10) return null;
+  return {
+    width: buffer.readUInt16LE(6),
+    height: buffer.readUInt16LE(8)
+  };
+}
+
+function parseJpegDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  let offset = 2;
+
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xFF) {
+      offset += 1;
+      continue;
+    }
+
+    let marker = buffer[offset + 1];
+    while (marker === 0xFF) {
+      offset += 1;
+      marker = buffer[offset + 1];
+    }
+
+    if (marker === 0xD9 || marker === 0xDA) {
+      break;
+    }
+
+    const size = buffer.readUInt16BE(offset + 2);
+    if (size < 2) {
+      break;
+    }
+
+    const isSof = (
+      (marker >= 0xC0 && marker <= 0xC3) ||
+      (marker >= 0xC5 && marker <= 0xC7) ||
+      (marker >= 0xC9 && marker <= 0xCB) ||
+      (marker >= 0xCD && marker <= 0xCF)
+    );
+
+    if (isSof && offset + 7 < buffer.length) {
+      return {
+        height: buffer.readUInt16BE(offset + 5),
+        width: buffer.readUInt16BE(offset + 7)
+      };
+    }
+
+    offset += 2 + size;
+  }
+
+  return null;
+}
+
+function parseImageDimensions(buffer, ext = '') {
+  const format = String(ext || '').toLowerCase();
+  if (format === 'png') return parsePngDimensions(buffer);
+  if (format === 'gif') return parseGifDimensions(buffer);
+  if (format === 'jpg' || format === 'jpeg') return parseJpegDimensions(buffer);
+  return parsePngDimensions(buffer) || parseGifDimensions(buffer) || parseJpegDimensions(buffer);
+}
+
+async function loadImageAsset(src) {
+  const url = String(src ?? '').trim();
+  if (!url) {
+    return null;
+  }
+
+  if (url.startsWith('data:')) {
+    const match = url.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,([\s\S]*)$/i);
+    if (!match) {
+      return null;
+    }
+
+    const mimeType = match[1] || 'image/png';
+    const isBase64 = Boolean(match[2]);
+    const data = isBase64 ? Buffer.from(match[3], 'base64') : Buffer.from(decodeURIComponent(match[3]), 'utf8');
+    const ext = guessImageExtensionFromMimeType(mimeType) || 'png';
+    return {
+      buffer: data,
+      ext,
+      mimeType,
+      width: 0,
+      height: 0
+    };
+  }
+
+  let resolvedUrl;
+  try {
+    resolvedUrl = new URL(url);
+  } catch {
+    return null;
+  }
+
+  if (!/^https?:$/i.test(resolvedUrl.protocol)) {
+    return null;
+  }
+
+  const response = await fetch(resolvedUrl);
+  if (!response.ok) {
+    return null;
+  }
+
+  const mimeType = response.headers.get('content-type') || '';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const ext = guessImageExtensionFromMimeType(mimeType) || guessImageExtensionFromUrl(url) || 'png';
+  const dimensions = parseImageDimensions(buffer, ext) || {};
+
+  return {
+    buffer,
+    ext,
+    mimeType,
+    width: dimensions.width || 0,
+    height: dimensions.height || 0
+  };
+}
+
+async function buildImageRegistry(result) {
+  const sources = new Set();
+  const visited = new WeakSet();
+
+  const visit = (value) => {
+    if (!value) {
+      return;
+    }
+
+    if (typeof value === 'string') {
+      const html = value;
+      for (const match of html.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']?([^"'\s>]+)["']?[^>]*>/gi)) {
+        sources.add(decodeHtmlEntities(match[1]));
+      }
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+
+    if (typeof value === 'object') {
+      if (visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+      Object.entries(value).forEach(([key, child]) => {
+        if (typeof child === 'string' && /^(src|url|image|image_url|imageUrl)$/i.test(key)) {
+          const trimmed = child.trim();
+          if (trimmed) {
+            sources.add(trimmed);
+          }
+        }
+        visit(child);
+      });
+    }
+  };
+
+  visit(result);
+
+  const items = [];
+  let index = 1;
+  for (const src of sources) {
+    const asset = await loadImageAsset(src);
+    if (!asset?.buffer) {
+      continue;
+    }
+
+    const ext = asset.ext || guessImageExtensionFromUrl(src) || 'png';
+    const dimensions = parseImageDimensions(asset.buffer, ext) || {};
+    items.push({
+      src,
+      ext,
+      buffer: asset.buffer,
+      width: dimensions.width || asset.width || 0,
+      height: dimensions.height || asset.height || 0,
+      relId: `rIdImage${index}`,
+      name: `image${index}.${ext}`
+    });
+    index += 1;
+  }
+
+  return items;
+}
+
+function imageParagraph(meta, options = {}) {
+  if (!meta?.relId) {
+    return '';
+  }
+
+  const { alt = 'image' } = options;
+  const maxWidthPx = 520;
+  const widthPx = meta.width > 0 ? Math.min(meta.width, maxWidthPx) : maxWidthPx;
+  const ratio = meta.width > 0 && meta.height > 0 ? meta.height / meta.width : 0.75;
+  const heightPx = Math.max(60, Math.round(widthPx * (ratio || 0.75)));
+  const cx = pxToEmu(widthPx);
+  const cy = pxToEmu(heightPx);
+
+  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="80" w:after="80"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${meta.relId.replace(/[^\d]/g, '') || '1'}" name="${escapeXmlAttr(alt)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${meta.relId.replace(/[^\d]/g, '') || '1'}" name="${escapeXmlAttr(alt)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${meta.relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
 function htmlToDocxParagraphs(html, options = {}) {
   const { size = '24', color = '', bold = false } = options;
   const source = String(html ?? '');
@@ -407,11 +674,21 @@ function htmlToDocxParagraphs(html, options = {}) {
 }
 
 function htmlToDocxInlineParagraphs(source, options = {}) {
-  const { size = '24', color = '', bold = false } = options;
+  const { size = '24', color = '', bold = false, imageRegistry = [] } = options;
   const tokens = source.match(/<[^>]+>|[^<]+/g) || [];
   const paragraphs = [];
   let runs = [];
   let style = { bold, italic: false, underline: false };
+  const images = Array.isArray(imageRegistry) ? imageRegistry : [];
+
+  const findImageMeta = (src) => {
+    const normalized = decodeHtmlEntities(String(src ?? '')).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    return images.find((item) => item.src === normalized) || null;
+  };
 
   const pushRun = (text) => {
     const value = decodeHtmlEntities(String(text ?? '').replace(/\s+/g, ' '));
@@ -447,6 +724,16 @@ function htmlToDocxInlineParagraphs(source, options = {}) {
     if (token.startsWith('<')) {
       const tag = token.replace(/[<>]/g, '').trim();
       const lower = tag.toLowerCase();
+
+      if (/^img\b/i.test(lower)) {
+        flush();
+        const attrs = parseImageAttributes(token);
+        const meta = findImageMeta(attrs.src || attrs['data-src'] || attrs['data-lazy-src'] || '');
+        if (meta) {
+          paragraphs.push(imageParagraph(meta, { alt: attrs.alt || attrs.title || 'image' }));
+        }
+        continue;
+      }
 
       if (/^br\b/i.test(lower)) {
         flush();
@@ -751,7 +1038,9 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
   const source = String(html ?? '');
   const stripped = source
     .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
+    .replaceAll(/(<(?:p|div|li|span|h[1-6])\b[^>]*>)\s*(\{\[|\{\{)/gi, '$1')
     .replaceAll(/^\s*(\{\[|\{\{)\s*/gi, '')
+    .replaceAll(/(\]\}|\}\})\s*(?=<\/(?:p|div|li|span|h[1-6])>)/gi, '')
     .replaceAll(/\s*(\]\}|\}\})\s*$/gi, '')
     .replaceAll(/<p>\s*Câu\s+\d+\s*[:.]\s*<\/p>/gi, '')
     .replaceAll(/<p>\s*Question\s+\d+\s*:?\s*<\/p>/gi, '');
@@ -821,6 +1110,10 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
       replaced = replaced.replace(
         new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${safeKey}\\b`, 'gi'),
         (match) => replaceWithChoice(match, key)
+      );
+      replaced = replaced.replace(
+        new RegExp(`\\b${safeKey}\\s*[-–—]\\s*(?=[\"'“”‘’])`, 'gi'),
+        ''
       );
     }
 
@@ -897,6 +1190,10 @@ function replaceAnswerRefsInXml(xml, answerTextMap = new Map()) {
     output = output.replace(
       new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${choiceKey}\\b`, 'gi'),
       replacement
+    );
+    output = output.replace(
+      new RegExp(`\\b${choiceKey}\\s*[-–—]\\s*(?=&quot;|&#34;|&ldquo;|&rdquo;|&lsquo;|&rsquo;|['"“”‘’])`, 'gi'),
+      ''
     );
   });
 
@@ -1776,17 +2073,16 @@ export function formatYouPassResult(result, quizTypeOverride) {
 
       for (const question of partQuestions) {
         if (isFillInTheBlankQuestion(question)) {
+          const rawTypeKey = getQuestionRawTypeKey(question);
           const answers = extractMarkedAnswers(question.gap_fill_in_blank);
 
           pushQuestionGroupLines(lines, question, answers);
 
-          splitTextLines(htmlToTextWithBlankPlaceholders(question.gap_fill_in_blank))
-            .forEach((line, lineIndex) => {
-              lines.push({
-                type: lineIndex === 0 ? 'passageTitle' : 'passageText',
-                text: line
-              });
-            });
+          lines.push({
+            type: 'questionGapHtml',
+            rawTypeKey,
+            html: htmlWithBlankPlaceholders(question.gap_fill_in_blank)
+          });
 
           answers.forEach((answer) => {
             const order = answer.order || question.order;
@@ -1794,8 +2090,12 @@ export function formatYouPassResult(result, quizTypeOverride) {
               return;
             }
 
+            const questionLabel = rawTypeKey === 'MAP_DIAGRAM_LABEL' && String(answer.questionText || '').trim() === '-' && order
+              ? `- [__${order}__]`
+              : answer.questionText;
+
             lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
-            lines.push({ type: 'questionText', text: answer.questionText });
+            lines.push({ type: 'questionText', text: questionLabel });
             addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer }, useReadingExplanation);
             if (order) {
               emittedQuestionOrders.add(String(order));
@@ -2124,8 +2424,9 @@ function formatResult(result) {
   return [String(result)];
 }
 
-export function createDocx({ id, result, quizTypeOverride }) {
+export async function createDocx({ id, result, quizTypeOverride }) {
   const quizType = quizTypeOverride ?? result?.data?.quiz_type;
+  const imageRegistry = await buildImageRegistry(result);
   const coverLines = buildCoverPageLines({
     quizType,
     id,
@@ -2189,6 +2490,13 @@ export function createDocx({ id, result, quizTypeOverride }) {
       return passageParagraph(line.text);
     }
 
+    if (line.type === 'questionGapHtml') {
+      const html = line.rawTypeKey === 'MAP_DIAGRAM_LABEL'
+        ? extractImageOnlyHtml(line.html)
+        : line.html;
+      return htmlToDocxParagraphs(html, { size: '26', imageRegistry });
+    }
+
     if (line.type === 'explanation') {
       return explanationParagraph(line);
     }
@@ -2231,7 +2539,7 @@ export function createDocx({ id, result, quizTypeOverride }) {
   });
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
   <w:body>
     ${lines}
     <w:sectPr>
@@ -2241,6 +2549,14 @@ export function createDocx({ id, result, quizTypeOverride }) {
   </w:body>
 </w:document>`;
 
+  const imageContentTypes = [...new Set(imageRegistry.map((item) => item.ext).filter(Boolean))].map((ext) => (
+    `<Default Extension="${ext}" ContentType="image/${ext === 'jpg' ? 'jpeg' : ext}"/>`
+  )).join('\n  ');
+
+  const imageRelationships = imageRegistry.map((item) => (
+    `<Relationship Id="${item.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${item.name}"/>`
+  )).join('\n  ');
+
   return createZip([
     {
       name: '[Content_Types].xml',
@@ -2248,6 +2564,7 @@ export function createDocx({ id, result, quizTypeOverride }) {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  ${imageContentTypes}
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 </Types>`
     },
@@ -2258,6 +2575,17 @@ export function createDocx({ id, result, quizTypeOverride }) {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`
     },
+    ...(imageRegistry.length > 0 ? [{
+      name: 'word/_rels/document.xml.rels',
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${imageRelationships}
+</Relationships>`
+    }] : []),
+    ...imageRegistry.map((item) => ({
+      name: `word/media/${item.name}`,
+      data: item.buffer
+    })),
     {
       name: 'word/document.xml',
       data: documentXml
@@ -2465,7 +2793,7 @@ export async function handleRequest(request, response) {
 
       const result = await fetchELearningResult({ id, token });
       appendExportLog(buildCleanExportRecord({ id, result, quizTypeOverride: skill }));
-      const docx = createDocx({ id, result, quizTypeOverride: skill });
+      const docx = await createDocx({ id, result, quizTypeOverride: skill });
       const fileName = `e-learning-${id.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
 
       send(response, 200, docx, contentTypes.docx, {
