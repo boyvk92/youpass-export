@@ -515,6 +515,22 @@ function htmlToDocxBlocks(source, options = {}) {
   return blocks.join('');
 }
 
+function stripAnswerParagraphFromSecondCell(cellHtml) {
+  const html = String(cellHtml ?? '');
+  const paragraphs = html.match(/<p[\s\S]*?<\/p>/gi);
+
+  if (!paragraphs || paragraphs.length === 0) {
+    return html;
+  }
+
+  const firstParagraphText = htmlToText(paragraphs[0]);
+  if (/^[A-D]$/i.test(firstParagraphText) || /^[0-9]+$/.test(firstParagraphText)) {
+    return html.replace(paragraphs[0], '');
+  }
+
+  return html;
+}
+
 function htmlTableToDocx(tableHtml, options = {}) {
   const rows = [];
   const rowRegex = /<tr[\s\S]*?<\/tr>/gi;
@@ -533,6 +549,14 @@ function htmlTableToDocx(tableHtml, options = {}) {
         html: cellMatch[2]
       });
     }
+
+    if (cells.length > 0) {
+      const firstCellText = htmlToText(cells[0].html);
+      if (/^\d+$/.test(firstCellText)) {
+        cells.shift();
+      }
+    }
+
     return cells;
   }).filter((row) => row.length > 0);
 
@@ -547,7 +571,8 @@ function htmlTableToDocx(tableHtml, options = {}) {
   const rowXml = parsedRows.map((row) => {
     const cellXml = row.map((cell, index) => {
       const isHeader = cell.tag === 'th';
-      const cellRuns = htmlToDocxInlineParagraphs(cell.html, {
+      const cellHtml = index === 1 ? stripAnswerParagraphFromSecondCell(cell.html) : cell.html;
+      const cellRuns = htmlToDocxInlineParagraphs(cellHtml, {
         ...options,
         bold: isHeader || options.bold
       });
@@ -721,6 +746,45 @@ function cleanExplanationLine(line) {
     .trim();
 }
 
+function normalizeExplanationHtml(html, answerTokens = []) {
+  const source = String(html ?? '');
+  const stripped = source
+    .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
+    .replaceAll(/^\s*(\{\[|\{\{)\s*/gi, '')
+    .replaceAll(/\s*(\]\}|\}\})\s*$/gi, '')
+    .replaceAll(/<p>\s*Câu\s+\d+\s*[:.]\s*<\/p>/gi, '')
+    .replaceAll(/<p>\s*Question\s+\d+\s*:?\s*<\/p>/gi, '');
+
+  const normalizedTokens = new Set(
+    (Array.isArray(answerTokens) ? answerTokens : [])
+      .map((token) => htmlToText(token).trim().toUpperCase())
+      .filter(Boolean)
+  );
+
+  const paragraphs = stripped.match(/<p[\s\S]*?<\/p>/gi);
+  if (!paragraphs || paragraphs.length === 0) {
+    const lines = splitTextLines(htmlToText(stripped));
+    let index = 0;
+    while (index < lines.length) {
+      const normalizedLine = htmlToText(lines[index]).trim().toUpperCase();
+      if (/^\d+$/.test(lines[index]) || /^[A-D]$/.test(normalizedLine) || normalizedTokens.has(normalizedLine)) {
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    return lines.slice(index).join('\n');
+  }
+
+  const filteredParagraphs = paragraphs.filter((paragraph) => {
+    const text = htmlToText(paragraph).trim();
+    const normalized = text.toUpperCase();
+    return !(/^\d+$/.test(text) || /^[A-D]$/.test(normalized) || normalizedTokens.has(normalized));
+  });
+
+  return filteredParagraphs.join('');
+}
+
 function questionKeywordsParagraphs(keywords = []) {
   if (!Array.isArray(keywords) || keywords.length === 0) {
     return '';
@@ -746,47 +810,13 @@ function questionKeywordsParagraphs(keywords = []) {
   return table;
 }
 
-function explanationBodyParagraphs(explanationLines = []) {
-  if (!Array.isArray(explanationLines) || explanationLines.length === 0) {
+function questionExplanationBlock(explanationHtml = '') {
+  const source = normalizeExplanationHtml(explanationHtml);
+  if (!String(source ?? '').trim()) {
     return '';
   }
 
-  const paragraphs = [];
-  let stepIndex = 0;
-
-  explanationLines.forEach((line) => {
-    const cleanedLine = cleanExplanationLine(line);
-    if (!cleanedLine) {
-      return;
-    }
-
-    const stepMatch = cleanedLine.match(/^(Bước\s+\d+\s*:)\s*(.*)$/i);
-
-    if (!stepMatch) {
-      paragraphs.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="20"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(cleanedLine)}</w:t></w:r></w:p>`);
-      return;
-    }
-
-    stepIndex += 1;
-    if (stepIndex > 1) {
-      paragraphs.push('<w:p><w:r><w:t xml:space="preserve"> </w:t></w:r></w:p>');
-    }
-
-    paragraphs.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(stepMatch[1])}</w:t></w:r></w:p>`);
-    if (stepMatch[2]) {
-      paragraphs.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="20"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(stepMatch[2])}</w:t></w:r></w:p>`);
-    }
-  });
-
-  return paragraphs.join('');
-}
-
-function questionExplanationBlock(explanationLines = []) {
-  if (!Array.isArray(explanationLines) || explanationLines.length === 0) {
-    return '';
-  }
-
-  const body = explanationBodyParagraphs(explanationLines);
+  const body = htmlToDocxParagraphs(source, { size: '24' });
   return `<w:tbl>
     <w:tblPr>
       <w:tblW w:w="5000" w:type="pct"/>
@@ -807,7 +837,7 @@ function questionExplanationBlock(explanationLines = []) {
 function questionBlockKeywordsAndExplanation(block) {
   return [
     questionKeywordsParagraphs(block.keywords),
-    questionExplanationBlock(block.explanationLines)
+    questionExplanationBlock(block.explanationHtml)
   ].filter(Boolean).join('');
 }
 
@@ -1288,10 +1318,9 @@ function extractMarkedExplanations(html) {
       .slice(cursor, match.index)
       .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
       .replace(/^\s*(\{\[|\{\{)\s*/i, '');
-    const explanation = htmlToText(chunk);
 
-    if (order && explanation) {
-      explanations.set(String(order), explanation);
+    if (order && chunk.trim()) {
+      explanations.set(String(order), chunk);
     }
 
     cursor = markerPattern.lastIndex;
@@ -1309,13 +1338,48 @@ function buildExplanationMap(questions) {
       explanations.set(String(order), explanation);
     });
 
-    const explanation = htmlToText(question.explain);
-    if (markedExplanations.size === 0 && question.order && explanation) {
+    const explanation = normalizeExplanationHtml(question.explain);
+    if (markedExplanations.size === 0 && question.order && explanation.trim()) {
       explanations.set(String(question.order), explanation);
     }
   }
 
   return explanations;
+}
+
+function collectQuestionAnswerTokens(question, details = {}) {
+  const tokens = [];
+  const pushToken = (value) => {
+    const text = htmlToText(value).trim();
+    if (text) {
+      tokens.push(text);
+    }
+  };
+
+  pushToken(details.answer);
+  pushToken(question.correct_answer);
+
+  if (Array.isArray(question.correct_answers)) {
+    question.correct_answers.forEach(pushToken);
+  }
+
+  if (Array.isArray(question.selection)) {
+    question.selection.forEach((item) => {
+      pushToken(item?.answer);
+      pushToken(item?.text);
+    });
+  }
+
+  if (Array.isArray(details.choices)) {
+    details.choices.forEach((choice) => {
+      if (choice?.correct) {
+        pushToken(choice.option);
+        pushToken(choice.text);
+      }
+    });
+  }
+
+  return [...new Set(tokens)];
 }
 
 function addExplanationLines(lines, question, order, explanationsByOrder, details = {}, enabled = true) {
@@ -1324,12 +1388,15 @@ function addExplanationLines(lines, question, order, explanationsByOrder, detail
   }
 
   const rawTypeKey = getQuestionRawTypeKey(question);
-  const explanation = (order && explanationsByOrder.get(String(order))) || htmlToText(question.explain);
-  const explanationLines = splitTextLines(explanation);
+  const answerTokens = collectQuestionAnswerTokens(question, details);
+  const explanationHtml = normalizeExplanationHtml(
+    (order && explanationsByOrder.get(String(order))) || question.explain,
+    answerTokens
+  );
   const keywords = extractQuestionKeywords(question);
   const answer = htmlToText(details.answer);
 
-  if (!answer && keywords.length === 0 && explanationLines.length === 0) {
+  if (!answer && keywords.length === 0 && !String(explanationHtml ?? '').trim()) {
     return;
   }
 
@@ -1347,10 +1414,10 @@ function addExplanationLines(lines, question, order, explanationsByOrder, detail
     });
   }
 
-  if (explanationLines.length > 0) {
+  if (String(explanationHtml ?? '').trim()) {
     lines.push({
       type: 'questionExplanationBlock',
-      explanationLines
+      explanationHtml
     });
   }
 }
@@ -1817,7 +1884,7 @@ export function createDocx({ id, result, quizTypeOverride }) {
     }
 
     if (line.type === 'questionExplanationBlock') {
-      return questionExplanationBlock(line.explanationLines);
+      return questionExplanationBlock(line.explanationHtml);
     }
 
     if (line.type === 'answer') {
