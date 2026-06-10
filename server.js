@@ -20,6 +20,7 @@ const PORT = Number(process.env.PORT || config.port || 3001);
 const HOST = process.env.HOST || config.host || '127.0.0.1';
 const API_URL = process.env.E_LEARNING_API_URL || config.apiUrl || DEFAULT_API_URL;
 const EXPORT_LOG_FILE = 'logs/e-learning-export-log.log';
+const DOCX_RENDER_LOG_FILE = 'logs/e-learning-render-docx.log';
 
 const IELTS_TYPES = {
   1: 'Multiple Choice',
@@ -793,25 +794,19 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
   };
 
   const replaceAnswerRefs = (htmlText) => {
-    let output = decodeHtmlEntities(String(htmlText ?? ''));
-
-    normalizedChoiceMap.forEach((choiceText, choiceKey) => {
+    const output = decodeHtmlEntities(String(htmlText ?? ''));
+    return output.replace(/(Đáp\s*án\s*|Answer\s*)([A-D])\b/gi, (match, prefix, key) => {
+      const choiceText = normalizedChoiceMap.get(String(key).trim().toUpperCase());
       if (!choiceText) {
-        return;
+        return match;
       }
 
-      const safeChoiceText = choiceText.replace(/\s+/g, ' ').trim();
-      const patterns = [
-        new RegExp(`(Đáp\\s*án\\s*)${choiceKey}\\b`, 'gi'),
-        new RegExp(`(Answer\\s*)${choiceKey}\\b`, 'gi')
-      ];
+      const displayText = choiceText.length > 70
+        ? `${choiceText.slice(0, 67).trimEnd()}...`
+        : choiceText;
 
-      patterns.forEach((pattern) => {
-        output = output.replace(pattern, `$1${safeChoiceText}`);
-      });
+      return `Đáp án "<strong>${escapeHtml(displayText)}</strong>"`;
     });
-
-    return output;
   };
 
   const answerBlockPatterns = [
@@ -832,6 +827,22 @@ function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new M
   }
 
   return normalizedHtml;
+}
+
+function replaceAnswerRefsInXml(xml, answerTextMap = new Map()) {
+  const normalizedChoiceMap = new Map(
+    Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
+      .map(([key, value]) => [String(key).trim().toUpperCase(), String(value ?? '').trim()])
+      .filter(([, value]) => Boolean(value))
+  );
+
+  let output = String(xml ?? '');
+  normalizedChoiceMap.forEach((choiceText, choiceKey) => {
+    output = output.replace(new RegExp(`Đáp\\s*án\\s*${choiceKey}\\b`, 'gi'), `Đáp án ${escapeXml(choiceText)}`);
+    output = output.replace(new RegExp(`Answer\\s*${choiceKey}\\b`, 'gi'), `Đáp án ${escapeXml(choiceText)}`);
+  });
+
+  return output;
 }
 
 function questionKeywordsParagraphs(keywords = []) {
@@ -860,8 +871,8 @@ function questionKeywordsParagraphs(keywords = []) {
 }
 
 function questionExplanationBlock(explanationHtml = '', answerTokens = [], answerTextMap = new Map()) {
-  const source = normalizeExplanationHtml(explanationHtml, answerTokens, answerTextMap);
-  if (!String(source ?? '').trim()) {
+  const source = String(explanationHtml ?? '');
+  if (!source.trim()) {
     return '';
   }
 
@@ -1438,10 +1449,17 @@ function collectQuestionChoiceTextMap(details = {}) {
       return;
     }
 
-    const key = String(choice.option ?? choice.key ?? choice.label ?? String.fromCharCode(65 + index)).trim().toUpperCase();
-    const value = String(choice.text ?? '').trim();
+    const rawValue = String(choice.text ?? choice.displayText ?? '').trim();
+    const value = rawValue.replace(/^[A-D]\s*[.)]\s*/i, '').trim();
+    const fallbackKey = String.fromCharCode(65 + index);
+    const rawKey = String(choice.option ?? choice.key ?? choice.label ?? '').trim().toUpperCase();
+    const key = /^[A-D]$/.test(rawKey) ? rawKey : fallbackKey;
+
     if (key && value) {
       map.set(key, value);
+      if (/^[A-D]$/.test(rawKey) && rawKey !== key) {
+        map.set(rawKey, value);
+      }
     }
   });
 
@@ -1638,7 +1656,9 @@ export function formatYouPassResult(result, quizTypeOverride) {
           : [];
         const choiceOptions = singleChoiceOptions.length > 0 ? singleChoiceOptions : formatChoiceOptions(question);
         const sharedOptions = formatSharedOptions(question);
-        const renderedChoiceOptions = sharedOptions.length > 0 ? sharedOptions : choiceOptions;
+        const renderedChoiceOptions = isMultipleChoiceOne
+          ? (singleChoiceOptions.length > 0 ? singleChoiceOptions : choiceOptions)
+          : (sharedOptions.length > 0 ? sharedOptions : choiceOptions);
         const choiceAnswer = getChoiceAnswer(question, choiceOptions);
 
         if (answers.length === 0 && choiceOptions.length > 0) {
@@ -1673,6 +1693,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
               questionText: fallback,
               choices: renderedChoiceOptions.map((option) => ({
                 ...option,
+                displayText: formatOptionText(option),
                 correct: option.correct || option.option === choiceAnswer
               }))
             }, useReadingExplanation);
@@ -1718,6 +1739,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
             questionText: answer.questionText,
             choices: renderedChoiceOptions.map((option) => ({
               ...option,
+              displayText: formatOptionText(option),
               correct: option.correct || option.option === choiceAnswer
             }))
           }, useReadingExplanation);
@@ -1869,6 +1891,43 @@ function appendExportLog(record) {
   }
 }
 
+function serializeRenderValue(value) {
+  if (value instanceof Map) {
+    return Array.from(value.entries());
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeRenderValue(item));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, serializeRenderValue(item)])
+    );
+  }
+
+  return value;
+}
+
+function appendDocxRenderLog(record) {
+  const payload = `${JSON.stringify(serializeRenderValue(record), null, 2)}\n\n`;
+
+  try {
+    mkdirSync('logs', { recursive: true });
+    appendFileSync(DOCX_RENDER_LOG_FILE, payload, 'utf8');
+    return DOCX_RENDER_LOG_FILE;
+  } catch (error) {
+    try {
+      const fallbackFile = '/tmp/e-learning-render-docx.log';
+      appendFileSync(fallbackFile, payload, 'utf8');
+      return fallbackFile;
+    } catch {
+      console.warn('Khong ghi duoc file log render docx.', error);
+      return '';
+    }
+  }
+}
+
 function formatResult(result) {
   if (!result) {
     return ['Chua co endpoint e-learning. Dat bien moi truong E_LEARNING_API_URL de tool tu dong lay du lieu.'];
@@ -1982,6 +2041,14 @@ export function createDocx({ id, result, quizTypeOverride }) {
       ? resultLines.map(renderLine)
       : [heading('Noi dung'), ...formatResult(result).map(paragraph)])
   ].join('');
+
+  appendDocxRenderLog({
+    exportedAt: new Date().toISOString(),
+    id,
+    quizType,
+    coverLines,
+    resultLines
+  });
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
