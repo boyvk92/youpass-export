@@ -2,6 +2,7 @@ import http from 'node:http';
 import { Buffer } from 'node:buffer';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import JSZip from 'jszip';
 import { buildCoverPageLines } from './cover-page.js';
 import { resolveQuizType } from './quiz-types.js';
 
@@ -2916,11 +2917,15 @@ function renderForm(error = '') {
     <h1>Export ket qua e-learning</h1>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <form method="post" action="/export">
+      <label for="source">ID hoặc URL</label>
+      <input id="source" name="source" autocomplete="off" placeholder="https://e-learning.youpass.vn/practice/reading/1312?type=review&answerId=14869981">
+
       <label for="id">ID</label>
-      <input id="id" name="id" autocomplete="off" required>
+      <input id="id" name="id" autocomplete="off" placeholder="1312">
 
       <label for="skill">Kỹ năng</label>
-      <select id="skill" name="skill" required>
+      <select id="skill" name="skill">
+        <option value="">-- Tự động từ URL hoặc chọn tay --</option>
         <option value="listening">Listening</option>
         <option value="reading">Reading</option>
         <option value="writing">Writing</option>
@@ -2932,6 +2937,119 @@ function renderForm(error = '') {
 
       <button type="submit">Xuat file DOCX</button>
     </form>
+    <p style="margin:16px 0 0;"><a href="/bulk">Xuất nhiều file ZIP</a></p>
+  </main>
+</body>
+</html>`;
+}
+
+function renderBulkForm(error = '') {
+  return `<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>E-learning Bulk Export</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      color: #1d2733;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    main {
+      width: min(100%, 520px);
+      background: #ffffff;
+      border: 1px solid #d8dee6;
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 8px 24px rgba(29, 39, 51, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      font-weight: 700;
+    }
+
+    input, textarea {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #b8c1cc;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 16px;
+    }
+
+    input {
+      height: 42px;
+    }
+
+    textarea {
+      min-height: 130px;
+      resize: vertical;
+    }
+
+    button {
+      width: 100%;
+      height: 44px;
+      margin-top: 20px;
+      border: 0;
+      border-radius: 6px;
+      background: #1f6feb;
+      color: white;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .error {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border: 1px solid #e5534b;
+      border-radius: 6px;
+      background: #fff1f0;
+      color: #8a1f17;
+    }
+
+    .hint {
+      margin: 0 0 14px;
+      color: #5c6773;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Xuất nhiều file ZIP</h1>
+    <p class="hint">Dán API danh sách quiz. Hệ thống sẽ lấy từng quiz, sinh DOCX và đóng gói vào một file ZIP.</p>
+    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+    <form method="post" action="/export-bulk">
+      <label for="listUrl">API danh sách</label>
+      <textarea id="listUrl" name="listUrl" placeholder="https://api.youpass.vn/v1/quizzes?page_size=20&page=1&types=7&status=published&is_test=true&quiz_types=3&writing_task_type=1&isLogin=true&sort=practice_listing_priority.desc,date_created.desc&submitted_status=2" required></textarea>
+
+      <label for="token">Token</label>
+      <input id="token" name="token" type="text" autocomplete="off" required>
+
+      <button type="submit">Xuat ZIP</button>
+    </form>
+    <p style="margin:16px 0 0;"><a href="/">Quay lại xuất 1 file</a></p>
   </main>
 </body>
 </html>`;
@@ -2945,6 +3063,125 @@ function send(response, statusCode, body, contentType = contentTypes.text, heade
   response.end(body);
 }
 
+function extractQuizInfo(source) {
+  const text = String(source ?? '').trim();
+  if (!text) {
+    return {};
+  }
+
+  if (/^\d+$/.test(text)) {
+    return { id: text };
+  }
+
+  try {
+    const url = new URL(text);
+    const pathSegments = url.pathname.split('/').filter(Boolean);
+    const id = [...pathSegments].reverse().find((segment) => /^\d+$/.test(segment)) || '';
+    const skill = pathSegments.find((segment) => /^(listening|reading|writing|speaking)$/i.test(segment)) || '';
+
+    return {
+      id,
+      skill: skill.toLowerCase()
+    };
+  } catch {
+    return {};
+  }
+}
+
+function extractQuizListItems(payload) {
+  const candidates = [
+    payload?.data?.items,
+    payload?.data?.results,
+    payload?.data?.rows,
+    payload?.data?.quizzes,
+    payload?.data?.data,
+    payload?.items,
+    payload?.results,
+    payload?.rows,
+    payload?.quizzes,
+    payload?.data,
+    payload
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return [];
+}
+
+function sanitizeFileNamePart(value) {
+  return String(value ?? '')
+    .replaceAll(/[\\/:*?"<>|]+/g, '_')
+    .replaceAll(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+async function fetchQuizList({ listUrl, token }) {
+  const response = await fetch(listUrl, {
+    headers: {
+      Authorization: normalizeAuthorizationToken(token),
+      Accept: 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Danh sach quiz tra ve HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('Danh sach quiz khong tra ve JSON');
+  }
+
+  return response.json();
+}
+
+async function buildBulkZip({ listUrl, token }) {
+  const listResult = await fetchQuizList({ listUrl, token });
+  const quizzes = extractQuizListItems(listResult);
+  if (quizzes.length === 0) {
+    throw new Error('Khong tim thay danh sach quiz hop le trong API');
+  }
+
+  const zip = new JSZip();
+  const errors = [];
+  let addedCount = 0;
+
+  for (const item of quizzes) {
+    const id = String(item?.id ?? item?.quiz_id ?? item?.quizId ?? '').trim();
+    if (!id) {
+      continue;
+    }
+
+    try {
+      const result = await fetchELearningResult({ id, token });
+      const title = htmlToText(result?.data?.title || item?.title || `quiz-${id}`);
+      const quizTypeOverride = resolveQuizType(result?.data?.quiz_type).key || '';
+      const docx = await createDocx({ id, result, quizTypeOverride });
+      const fileName = `${sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`}.docx`;
+
+      zip.file(fileName, docx);
+      addedCount += 1;
+    } catch (error) {
+      errors.push(`${id}: ${error.message}`);
+    }
+  }
+
+  if (addedCount === 0) {
+    throw new Error('Khong tao duoc file DOCX nao tu danh sach quiz');
+  }
+
+  if (errors.length > 0) {
+    zip.file('errors.txt', errors.join('\n'));
+  }
+
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
 export async function handleRequest(request, response) {
   const requestUrl = new URL(request.url || '/', 'http://localhost');
 
@@ -2954,22 +3191,31 @@ export async function handleRequest(request, response) {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/bulk') {
+      send(response, 200, renderBulkForm(), contentTypes.html);
+      return;
+    }
+
     if (request.method === 'POST' && requestUrl.pathname === '/export') {
       const body = await collectBody(request);
       const form = new URLSearchParams(body);
+      const source = String(form.get('source') || '').trim();
       const id = String(form.get('id') || '').trim();
       const skill = String(form.get('skill') || '').trim();
       const token = String(form.get('token') || '').trim();
+      const sourceInfo = extractQuizInfo(source);
+      const resolvedId = sourceInfo.id || id;
+      const resolvedSkill = sourceInfo.skill || skill;
 
-      if (!id || !skill || !token) {
-        send(response, 400, renderForm('Vui long nhap day du ID, ky nang va token.'), contentTypes.html);
+      if (!resolvedId || !resolvedSkill || !token) {
+        send(response, 400, renderForm('Vui long nhap day du ID/URL, ky nang va token.'), contentTypes.html);
         return;
       }
 
-      const result = await fetchELearningResult({ id, token });
-      appendExportLog(buildCleanExportRecord({ id, result, quizTypeOverride: skill }));
-      const docx = await createDocx({ id, result, quizTypeOverride: skill });
-      const fileName = `e-learning-${id.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
+      const result = await fetchELearningResult({ id: resolvedId, token });
+      appendExportLog(buildCleanExportRecord({ id: resolvedId, result, quizTypeOverride: resolvedSkill }));
+      const docx = await createDocx({ id: resolvedId, result, quizTypeOverride: resolvedSkill });
+      const fileName = `e-learning-${resolvedId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
 
       send(response, 200, docx, contentTypes.docx, {
         'Content-Disposition': `attachment; filename="${fileName}"`,
@@ -2978,8 +3224,34 @@ export async function handleRequest(request, response) {
       return;
     }
 
+    if (request.method === 'POST' && requestUrl.pathname === '/export-bulk') {
+      const body = await collectBody(request);
+      const form = new URLSearchParams(body);
+      const listUrl = String(form.get('listUrl') || '').trim();
+      const token = String(form.get('token') || '').trim();
+
+      if (!listUrl || !token) {
+        send(response, 400, renderBulkForm('Vui long nhap day du API danh sach va token.'), contentTypes.html);
+        return;
+      }
+
+      const zip = await buildBulkZip({ listUrl, token });
+      const zipName = `e-learning-bulk-${Date.now()}.zip`;
+
+      send(response, 200, zip, 'application/zip', {
+        'Content-Disposition': `attachment; filename="${zipName}"`,
+        'Content-Length': zip.length
+      });
+      return;
+    }
+
     send(response, 404, 'Not found');
   } catch (error) {
+    if (requestUrl.pathname === '/bulk' || requestUrl.pathname === '/export-bulk') {
+      send(response, 500, renderBulkForm(error.message), contentTypes.html);
+      return;
+    }
+
     send(response, 500, renderForm(error.message), contentTypes.html);
   }
 }
