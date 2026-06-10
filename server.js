@@ -21,6 +21,7 @@ const HOST = process.env.HOST || config.host || '127.0.0.1';
 const API_URL = process.env.E_LEARNING_API_URL || config.apiUrl || DEFAULT_API_URL;
 const EXPORT_LOG_FILE = 'logs/e-learning-export-log.log';
 const DOCX_RENDER_LOG_FILE = 'logs/e-learning-render-docx.log';
+const ENABLE_FILE_LOGS = !process.env.VERCEL;
 
 const IELTS_TYPES = {
   1: 'Multiple Choice',
@@ -1416,23 +1417,118 @@ function extractTextLines(node) {
 }
 
 function getPartQuestions(part) {
-  if (Array.isArray(part.questions) && part.questions.length > 0) {
-    return part.questions;
+  const collectHtmlContent = (value) => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => collectHtmlContent(item)).filter(Boolean).join('<br>');
+    }
+
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (typeof value !== 'object') {
+      return String(value);
+    }
+
+    return collectHtmlContent(
+      value.html
+        ?? value.content
+        ?? value.text
+        ?? value.value
+        ?? value.children
+        ?? ''
+    );
+  };
+
+  const normalizeFromSet = (questionSet, question, index) => {
+    const sharedQuestionContent = collectHtmlContent(questionSet.content);
+    const sharedQuestionGroupKey = questionSet.id || questionSet.title || questionSet.question_set_id || '';
+
+    return {
+      ...question,
+      question_type: question.question_type || questionSet.question_type,
+      description: index === 0
+        ? [questionSet.title, htmlToText(questionSet.description)].filter(Boolean).join('<br>')
+        : question.description,
+      shared_question_content: index === 0 ? sharedQuestionContent : '',
+      shared_question_group_key: sharedQuestionGroupKey,
+      shared_options: Array.isArray(questionSet.options) && questionSet.options.length > 0 ? questionSet.options : null,
+      shared_option_group_key: sharedQuestionGroupKey
+    };
+  };
+
+  const normalizedQuestions = [];
+  const seen = new Map();
+
+  const isPresent = (value) => {
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+
+    return value !== null && value !== undefined && String(value).trim() !== '';
+  };
+
+  const mergeQuestionRecords = (target, source) => {
+    if (!target) {
+      return source;
+    }
+
+    const merged = { ...target };
+
+    for (const [key, value] of Object.entries(source || {})) {
+      if (key === 'shared_question_content' || key === 'shared_question_group_key' || key === 'shared_options' || key === 'shared_option_group_key') {
+        if (!isPresent(merged[key]) && isPresent(value)) {
+          merged[key] = value;
+        }
+        continue;
+      }
+
+      if (!isPresent(merged[key]) && isPresent(value)) {
+        merged[key] = value;
+      }
+    }
+
+    return merged;
+  };
+
+  const pushUnique = (question) => {
+    if (!question) {
+      return;
+    }
+
+    const signature = [
+      String(question.order ?? '').trim(),
+      htmlToText(question.text || question.content || question.title),
+      htmlToText(question.question_text || question.questionText || ''),
+      getQuestionRawTypeKey(question)
+    ].join('|');
+
+    if (seen.has(signature)) {
+      const index = seen.get(signature);
+      normalizedQuestions[index] = mergeQuestionRecords(normalizedQuestions[index], question);
+      return;
+    }
+
+    seen.set(signature, normalizedQuestions.length);
+    normalizedQuestions.push(question);
+  };
+
+  if (Array.isArray(part.question_sets) && part.question_sets.length > 0) {
+    part.question_sets.forEach((questionSet) => {
+      (questionSet.questions || []).forEach((question, index) => {
+        pushUnique(normalizeFromSet(questionSet, question, index));
+      });
+    });
   }
 
-  if (!Array.isArray(part.question_sets)) {
-    return [];
-  }
+  const rawQuestions = Array.isArray(part.questions) ? part.questions : [];
+  rawQuestions.forEach((question) => pushUnique(question));
 
-  return part.question_sets.flatMap((questionSet) => (questionSet.questions || []).map((question, index) => ({
-    ...question,
-    question_type: question.question_type || questionSet.question_type,
-    description: index === 0
-      ? [questionSet.title, htmlToText(questionSet.description)].filter(Boolean).join('<br>')
-      : question.description,
-    shared_options: Array.isArray(questionSet.options) && questionSet.options.length > 0 ? questionSet.options : null,
-    shared_option_group_key: questionSet.id || questionSet.title || question.question_set_id || ''
-  })));
+  return normalizedQuestions;
 }
 
 function extractMarkedAnswers(html) {
@@ -2069,6 +2165,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
       lines.push({ type: 'heading', text: 'Questions and answers' });
       const emittedQuestionOrders = new Set();
       const emittedSharedOptionGroups = new Set();
+      const emittedSharedQuestionGroups = new Set();
       const explanationsByOrder = buildExplanationMap(partQuestions);
 
       for (const question of partQuestions) {
@@ -2077,6 +2174,15 @@ export function formatYouPassResult(result, quizTypeOverride) {
           const answers = extractMarkedAnswers(question.gap_fill_in_blank);
 
           pushQuestionGroupLines(lines, question, answers);
+
+          const sharedQuestionGroupKey = String(question.shared_question_group_key || '').trim();
+          if (sharedQuestionGroupKey && question.shared_question_content && !emittedSharedQuestionGroups.has(sharedQuestionGroupKey)) {
+            lines.push({
+              type: 'questionDescriptionHtml',
+              html: question.shared_question_content
+            });
+            emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
+          }
 
           lines.push({
             type: 'questionGapHtml',
@@ -2125,11 +2231,12 @@ export function formatYouPassResult(result, quizTypeOverride) {
         const sharedOptions = formatSharedOptions(question);
         const renderedChoiceOptions = isMultipleChoiceOne
           ? (singleChoiceOptions.length > 0 ? singleChoiceOptions : choiceOptions)
-          : (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && multipleChoiceManyOptions.length > 0
-            ? multipleChoiceManyOptions
-            : (sharedOptions.length > 0 ? sharedOptions : choiceOptions))
+            : (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && multipleChoiceManyOptions.length > 0
+              ? multipleChoiceManyOptions
+              : (sharedOptions.length > 0 ? sharedOptions : choiceOptions))
           ;
         const choiceAnswer = getChoiceAnswer(question, choiceOptions);
+        const directAnswer = getDirectAnswer(question);
 
         if (answers.length === 0 && choiceOptions.length > 0) {
           if (!emittedQuestionOrders.has(String(question.order))) {
@@ -2173,11 +2280,21 @@ export function formatYouPassResult(result, quizTypeOverride) {
         }
 
         if (answers.length === 0) {
-          if (fallback && !emittedQuestionOrders.has(String(question.order))) {
+          if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
             pushQuestionGroupLines(lines, question, [{ order: question.order }]);
+            const sharedQuestionGroupKey = String(question.shared_question_group_key || '').trim();
+            if (sharedQuestionGroupKey && question.shared_question_content && !emittedSharedQuestionGroups.has(sharedQuestionGroupKey)) {
+              lines.push({
+                type: 'questionDescriptionHtml',
+                html: question.shared_question_content
+              });
+              emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
+            }
             lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
-            lines.push({ type: 'questionText', text: fallback });
-            const directAnswer = getDirectAnswer(question);
+            lines.push({
+              type: 'questionText',
+              text: fallback || `- [__${question.order}__]`
+            });
             addExplanationLines(lines, question, question.order, explanationsByOrder, {
               answer: directAnswer,
               questionText: fallback
@@ -2241,8 +2358,57 @@ export function formatYouPassResult(result, quizTypeOverride) {
 function buildCleanExportRecord({ id, result, quizTypeOverride }) {
   const data = result?.data ?? result ?? {};
   const quizType = resolveQuizType(quizTypeOverride ?? data?.quiz_type);
+  const collectHtmlContent = (value) => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => collectHtmlContent(item)).filter(Boolean).join('\n');
+    }
+
+    if (typeof value === 'string') {
+      return htmlToText(value);
+    }
+
+    if (typeof value !== 'object') {
+      return htmlToText(String(value));
+    }
+
+    return collectHtmlContent(
+      value.html
+        ?? value.content
+        ?? value.text
+        ?? value.value
+        ?? value.children
+        ?? ''
+    );
+  };
+
   const parts = extractYouPassParts(data).map((part, partIndex) => {
     const passage = splitPassageContent(part, data);
+    const questionSets = Array.isArray(part.question_sets) ? part.question_sets.map((questionSet, setIndex) => ({
+      index: setIndex + 1,
+      id: questionSet.id || '',
+      title: htmlToText(questionSet.title),
+      description: splitTextLines(htmlToText(questionSet.description)),
+      content: splitTextLines(collectHtmlContent(questionSet.content)),
+      question_type: getQuestionTypeLabel(questionSet) || '',
+      question_type_raw: getQuestionRawTypeText(questionSet),
+      questions: (questionSet.questions || []).map((question) => ({
+        order: question.order || '',
+        questionText: htmlToText(question.text || question.content || question.title),
+        rawType: question.question_type || question.type || question.kind || question.question_type_id || '',
+        type: getQuestionTypeLabel(question) || '',
+        selection: formatSelectionQuestion(question),
+        choices: formatChoiceOptions(question),
+        sharedOptions: formatSharedOptions(question),
+        gap_fill_in_blank: isFillInTheBlankQuestion(question)
+          ? splitTextLines(htmlToTextWithBlankPlaceholders(question.gap_fill_in_blank))
+          : []
+      }))
+    })) : [];
+
     const questions = getPartQuestions(part).flatMap((question) => {
       const rawType = question.question_type || question.type || question.kind || question.question_type_id || '';
       const typeLabel = getQuestionTypeLabel(question);
@@ -2339,6 +2505,7 @@ function buildCleanExportRecord({ id, result, quizTypeOverride }) {
         title: passage.title,
         content: passage.bodyLines
       },
+      questionSets,
       questions
     };
   });
@@ -2353,6 +2520,10 @@ function buildCleanExportRecord({ id, result, quizTypeOverride }) {
 }
 
 function appendExportLog(record) {
+  if (!ENABLE_FILE_LOGS) {
+    return '';
+  }
+
   const payload = `${JSON.stringify(record, null, 2)}\n\n`;
 
   try {
@@ -2390,6 +2561,10 @@ function serializeRenderValue(value) {
 }
 
 function appendDocxRenderLog(record) {
+  if (!ENABLE_FILE_LOGS) {
+    return '';
+  }
+
   const payload = `${JSON.stringify(serializeRenderValue(record), null, 2)}\n\n`;
 
   try {
