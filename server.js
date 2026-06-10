@@ -746,7 +746,7 @@ function cleanExplanationLine(line) {
     .trim();
 }
 
-function normalizeExplanationHtml(html, answerTokens = []) {
+function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new Map()) {
   const source = String(html ?? '');
   const stripped = source
     .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
@@ -761,28 +761,77 @@ function normalizeExplanationHtml(html, answerTokens = []) {
       .filter(Boolean)
   );
 
-  const paragraphs = stripped.match(/<p[\s\S]*?<\/p>/gi);
-  if (!paragraphs || paragraphs.length === 0) {
-    const lines = splitTextLines(htmlToText(stripped));
-    let index = 0;
-    while (index < lines.length) {
-      const normalizedLine = htmlToText(lines[index]).trim().toUpperCase();
-      if (/^\d+$/.test(lines[index]) || /^[A-D]$/.test(normalizedLine) || normalizedTokens.has(normalizedLine)) {
-        index += 1;
-        continue;
-      }
-      break;
+  const normalizedChoiceMap = new Map(
+    Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
+      .map(([key, value]) => [String(key).trim().toUpperCase(), String(value ?? '').trim()])
+      .filter(([, value]) => Boolean(value))
+  );
+
+  const isStandaloneAnswerText = (value) => {
+    const text = htmlToText(value).replace(/\u00a0/g, ' ').trim();
+    if (!text || normalizedTokens.size === 0) {
+      return false;
     }
-    return lines.slice(index).join('\n');
+
+    const cleaned = text
+      .replace(/^[\-•*]\s*/g, '')
+      .replace(/^(?:đáp\s*án|answer|đap\s*an|câu\s+\d+)\s*[:.\-]?\s*/i, '')
+      .trim()
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+      .replace(/[.,;:!?]+$/g, '')
+      .trim()
+      .toUpperCase();
+
+    if (!cleaned) {
+      return false;
+    }
+
+    return [...normalizedTokens].some((token) => {
+      const safeToken = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`^${safeToken}$`, 'i').test(cleaned);
+    });
+  };
+
+  const replaceAnswerRefs = (htmlText) => {
+    let output = decodeHtmlEntities(String(htmlText ?? ''));
+
+    normalizedChoiceMap.forEach((choiceText, choiceKey) => {
+      if (!choiceText) {
+        return;
+      }
+
+      const safeChoiceText = choiceText.replace(/\s+/g, ' ').trim();
+      const patterns = [
+        new RegExp(`(Đáp\\s*án\\s*)${choiceKey}\\b`, 'gi'),
+        new RegExp(`(Answer\\s*)${choiceKey}\\b`, 'gi')
+      ];
+
+      patterns.forEach((pattern) => {
+        output = output.replace(pattern, `$1${safeChoiceText}`);
+      });
+    });
+
+    return output;
+  };
+
+  const answerBlockPatterns = [
+    /<p\b[^>]*>\s*([^<]{1,40})\s*<\/p>/gi,
+    /<li\b[^>]*>\s*([^<]{1,80})\s*<\/li>/gi
+  ];
+
+  let normalizedHtml = replaceAnswerRefs(stripped);
+  for (const pattern of answerBlockPatterns) {
+    normalizedHtml = normalizedHtml.replace(pattern, (match) => {
+      const text = htmlToText(match).trim();
+      const normalized = text.toUpperCase();
+      if (/^\d+$/.test(text) || /^[A-D]$/.test(normalized) || isStandaloneAnswerText(text)) {
+        return '';
+      }
+      return match;
+    });
   }
 
-  const filteredParagraphs = paragraphs.filter((paragraph) => {
-    const text = htmlToText(paragraph).trim();
-    const normalized = text.toUpperCase();
-    return !(/^\d+$/.test(text) || /^[A-D]$/.test(normalized) || normalizedTokens.has(normalized));
-  });
-
-  return filteredParagraphs.join('');
+  return normalizedHtml;
 }
 
 function questionKeywordsParagraphs(keywords = []) {
@@ -810,8 +859,8 @@ function questionKeywordsParagraphs(keywords = []) {
   return table;
 }
 
-function questionExplanationBlock(explanationHtml = '') {
-  const source = normalizeExplanationHtml(explanationHtml);
+function questionExplanationBlock(explanationHtml = '', answerTokens = [], answerTextMap = new Map()) {
+  const source = normalizeExplanationHtml(explanationHtml, answerTokens, answerTextMap);
   if (!String(source ?? '').trim()) {
     return '';
   }
@@ -837,7 +886,7 @@ function questionExplanationBlock(explanationHtml = '') {
 function questionBlockKeywordsAndExplanation(block) {
   return [
     questionKeywordsParagraphs(block.keywords),
-    questionExplanationBlock(block.explanationHtml)
+    questionExplanationBlock(block.explanationHtml, block.answerTokens, block.answerTextMap)
   ].filter(Boolean).join('');
 }
 
@@ -1366,7 +1415,6 @@ function collectQuestionAnswerTokens(question, details = {}) {
   if (Array.isArray(question.selection)) {
     question.selection.forEach((item) => {
       pushToken(item?.answer);
-      pushToken(item?.text);
     });
   }
 
@@ -1374,12 +1422,30 @@ function collectQuestionAnswerTokens(question, details = {}) {
     details.choices.forEach((choice) => {
       if (choice?.correct) {
         pushToken(choice.option);
-        pushToken(choice.text);
       }
     });
   }
 
   return [...new Set(tokens)];
+}
+
+function collectQuestionChoiceTextMap(details = {}) {
+  const map = new Map();
+  const choices = Array.isArray(details.choices) ? details.choices : [];
+
+  choices.forEach((choice, index) => {
+    if (!choice) {
+      return;
+    }
+
+    const key = String(choice.option ?? choice.key ?? choice.label ?? String.fromCharCode(65 + index)).trim().toUpperCase();
+    const value = String(choice.text ?? '').trim();
+    if (key && value) {
+      map.set(key, value);
+    }
+  });
+
+  return map;
 }
 
 function addExplanationLines(lines, question, order, explanationsByOrder, details = {}, enabled = true) {
@@ -1389,9 +1455,11 @@ function addExplanationLines(lines, question, order, explanationsByOrder, detail
 
   const rawTypeKey = getQuestionRawTypeKey(question);
   const answerTokens = collectQuestionAnswerTokens(question, details);
+  const choiceTextMap = collectQuestionChoiceTextMap(details);
   const explanationHtml = normalizeExplanationHtml(
     (order && explanationsByOrder.get(String(order))) || question.explain,
-    answerTokens
+    answerTokens,
+    choiceTextMap
   );
   const keywords = extractQuestionKeywords(question);
   const answer = htmlToText(details.answer);
@@ -1417,7 +1485,9 @@ function addExplanationLines(lines, question, order, explanationsByOrder, detail
   if (String(explanationHtml ?? '').trim()) {
     lines.push({
       type: 'questionExplanationBlock',
-      explanationHtml
+      explanationHtml,
+      answerTokens,
+      answerTextMap: choiceTextMap
     });
   }
 }
@@ -1568,6 +1638,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
           : [];
         const choiceOptions = singleChoiceOptions.length > 0 ? singleChoiceOptions : formatChoiceOptions(question);
         const sharedOptions = formatSharedOptions(question);
+        const renderedChoiceOptions = sharedOptions.length > 0 ? sharedOptions : choiceOptions;
         const choiceAnswer = getChoiceAnswer(question, choiceOptions);
 
         if (answers.length === 0 && choiceOptions.length > 0) {
@@ -1578,7 +1649,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
               lines.push({ type: 'questionText', text: fallback });
             }
             if (isMultipleChoiceOne) {
-              labelIndexedOptions(sharedOptions.length > 0 ? sharedOptions : choiceOptions).forEach((option) => {
+              labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
                 lines.push({
                   type: 'choice',
                   text: formatOptionText(option),
@@ -1600,7 +1671,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
             addExplanationLines(lines, question, question.order, explanationsByOrder, {
               answer: isMultipleChoiceOne ? '' : choiceAnswer,
               questionText: fallback,
-              choices: choiceOptions.map((option) => ({
+              choices: renderedChoiceOptions.map((option) => ({
                 ...option,
                 correct: option.correct || option.option === choiceAnswer
               }))
@@ -1632,7 +1703,7 @@ export function formatYouPassResult(result, quizTypeOverride) {
           lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
           lines.push({ type: 'questionText', text: answer.questionText });
           if (isMultipleChoiceOne) {
-            labelIndexedOptions(sharedOptions.length > 0 ? sharedOptions : choiceOptions).forEach((option) => {
+            labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
               lines.push({
                 type: 'choice',
                 text: formatOptionText(option),
@@ -1644,7 +1715,11 @@ export function formatYouPassResult(result, quizTypeOverride) {
           }
           addExplanationLines(lines, question, order, explanationsByOrder, {
             answer: isMultipleChoiceOne ? '' : answer.answer,
-            questionText: answer.questionText
+            questionText: answer.questionText,
+            choices: renderedChoiceOptions.map((option) => ({
+              ...option,
+              correct: option.correct || option.option === choiceAnswer
+            }))
           }, useReadingExplanation);
           if (order) {
             emittedQuestionOrders.add(String(order));
@@ -1884,7 +1959,7 @@ export function createDocx({ id, result, quizTypeOverride }) {
     }
 
     if (line.type === 'questionExplanationBlock') {
-      return questionExplanationBlock(line.explanationHtml);
+      return questionExplanationBlock(line.explanationHtml, line.answerTokens, line.answerTextMap);
     }
 
     if (line.type === 'answer') {
