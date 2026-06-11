@@ -2935,10 +2935,20 @@ function renderForm(error = '') {
       <label for="token">Token</label>
       <input id="token" name="token" type="text" autocomplete="off" required>
 
-      <button type="submit">Xuat file DOCX</button>
+      <button type="submit" data-busy-text="Dang xuat DOCX...">Xuat file DOCX</button>
     </form>
     <p style="margin:16px 0 0;"><a href="/bulk">Xuất nhiều file ZIP</a></p>
   </main>
+  <script>
+    document.querySelectorAll('form').forEach((form) => {
+      form.addEventListener('submit', () => {
+        const button = form.querySelector('button[type="submit"]');
+        if (!button) return;
+        button.disabled = true;
+        button.textContent = button.dataset.busyText || 'Dang xu ly...';
+      });
+    });
+  </script>
 </body>
 </html>`;
 }
@@ -3038,19 +3048,58 @@ function renderBulkForm(error = '') {
 <body>
   <main>
     <h1>Xuất nhiều file ZIP</h1>
-    <p class="hint">Dán API danh sách quiz. Hệ thống sẽ lấy từng quiz, sinh DOCX và đóng gói vào một file ZIP.</p>
+    <p class="hint">Nhập các tham số query. API danh sách được cố định ở https://api.youpass.vn/v1/quizzes.</p>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <form method="post" action="/export-bulk">
-      <label for="listUrl">API danh sách</label>
-      <textarea id="listUrl" name="listUrl" placeholder="https://api.youpass.vn/v1/quizzes?page_size=20&page=1&types=7&status=published&is_test=true&quiz_types=3&writing_task_type=1&isLogin=true&sort=practice_listing_priority.desc,date_created.desc&submitted_status=2" required></textarea>
+      <label for="skill">Kỹ năng</label>
+      <select id="skill" name="skill" required>
+        <option value="writing">Writing</option>
+        <option value="reading">Reading</option>
+        <option value="listening">Listening</option>
+        <option value="speaking">Speaking</option>
+      </select>
+
+      <label for="types">types</label>
+      <input id="types" name="types" value="7" autocomplete="off" required>
+
+      <div data-writing-only>
+        <label for="quiz_types">quiz_types</label>
+        <input id="quiz_types" name="quiz_types" value="3" autocomplete="off">
+
+        <label for="writing_task_type">writing_task_type</label>
+        <input id="writing_task_type" name="writing_task_type" value="1" autocomplete="off">
+
+        <label for="submitted_status">submitted_status</label>
+        <input id="submitted_status" name="submitted_status" value="2" autocomplete="off">
+      </div>
 
       <label for="token">Token</label>
       <input id="token" name="token" type="text" autocomplete="off" required>
 
-      <button type="submit">Xuat ZIP</button>
+      <button type="submit" data-busy-text="Dang xuat ZIP...">Xuat ZIP</button>
     </form>
     <p style="margin:16px 0 0;"><a href="/">Quay lại xuất 1 file</a></p>
   </main>
+  <script>
+    const skillSelect = document.getElementById('skill');
+    const writingOnly = document.querySelector('[data-writing-only]');
+    const toggleWritingFields = () => {
+      if (!skillSelect || !writingOnly) return;
+      writingOnly.style.display = skillSelect.value === 'writing' ? '' : 'none';
+    };
+    if (skillSelect) {
+      skillSelect.addEventListener('change', toggleWritingFields);
+      toggleWritingFields();
+    }
+    document.querySelectorAll('form').forEach((form) => {
+      form.addEventListener('submit', () => {
+        const button = form.querySelector('button[type="submit"]');
+        if (!button) return;
+        button.disabled = true;
+        button.textContent = button.dataset.busyText || 'Dang xu ly...';
+      });
+    });
+  </script>
 </body>
 </html>`;
 }
@@ -3088,7 +3137,55 @@ function extractQuizInfo(source) {
   }
 }
 
-function extractQuizListItems(payload) {
+function normalizeSkillValue(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) {
+    return '';
+  }
+
+  if (text === 'writing') {
+    return 'writing';
+  }
+
+  if (text === 'reading' || text === 'listening' || text === 'speaking') {
+    return text;
+  }
+
+  return '';
+}
+
+function getBulkApiConfig(skill) {
+  const normalizedSkill = normalizeSkillValue(skill);
+  if (normalizedSkill === 'writing') {
+    return {
+      baseUrl: 'https://api.youpass.vn/v1/quizzes',
+      allowedKeys: ['page_size', 'page', 'types', 'quiz_types', 'writing_task_type', 'submitted_status'],
+      params: {
+        status: 'published',
+        is_test: 'true',
+        isLogin: 'true',
+        sort: 'practice_listing_priority.desc,date_created.desc'
+      }
+    };
+  }
+
+  const skillIdMap = {
+    reading: '1',
+    listening: '2',
+    speaking: '8'
+  };
+
+  return {
+    baseUrl: 'https://api.youpass.vn/v1/mock-test',
+    allowedKeys: ['page_size', 'page', 'skill_id'],
+    params: {
+      skill_id: skillIdMap[normalizedSkill] || '1',
+      sort: 'priority.desc'
+    }
+  };
+}
+
+function extractQuizListItems(payload, skill) {
   const candidates = [
     payload?.data?.items,
     payload?.data?.results,
@@ -3110,6 +3207,102 @@ function extractQuizListItems(payload) {
   }
 
   return [];
+}
+
+function extractMockTestGroupId(item) {
+  return String(item?.id ?? item?.mock_test_id ?? item?.mockTestId ?? item?.quiz_id ?? item?.quizId ?? '').trim();
+}
+
+function extractMockTestEntries(item, skill) {
+  const normalizedSkill = normalizeSkillValue(skill);
+  if (normalizedSkill === 'writing') {
+    return [item];
+  }
+
+  const mockTests = Array.isArray(item?.mock_tests) ? item.mock_tests : [];
+  if (mockTests.length > 0) {
+    return mockTests;
+  }
+
+  return [item];
+}
+
+function extractMockTestFinalId(detailPayload) {
+  const candidates = [
+    detailPayload?.data?.quizzes?.full?.id,
+    detailPayload?.data?.quizzes?.full?.quiz_id,
+    detailPayload?.data?.quizzes?.full?.quizId,
+    detailPayload?.data?.quiz?.id,
+    detailPayload?.data?.quiz?.quiz_id,
+    detailPayload?.data?.quiz?.quizId,
+    detailPayload?.data?.id,
+    detailPayload?.data?.quiz_id,
+    detailPayload?.data?.quizId
+  ];
+
+  for (const candidate of candidates) {
+    const id = String(candidate ?? '').trim();
+    if (id) {
+      return id;
+    }
+  }
+
+  return '';
+}
+
+function extractQuizListTotal(payload) {
+  const candidates = [
+    payload?.data?.total,
+    payload?.data?.meta?.total,
+    payload?.data?.pagination?.total,
+    payload?.meta?.total,
+    payload?.pagination?.total,
+    payload?.total,
+    payload?.count
+  ];
+
+  for (const candidate of candidates) {
+    const total = Number(candidate);
+    if (Number.isFinite(total) && total >= 0) {
+      return total;
+    }
+  }
+
+  return null;
+}
+
+function buildFixedBulkListUrl(params = {}, baseUrl = 'https://api.youpass.vn/v1/quizzes', allowedKeys = []) {
+  const url = new URL(baseUrl);
+
+  const defaults = {
+    status: 'published',
+    is_test: 'true',
+    isLogin: 'true',
+    sort: 'practice_listing_priority.desc,date_created.desc'
+  };
+
+  if (baseUrl.includes('/v1/quizzes')) {
+    Object.entries(defaults).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+  }
+
+  for (const key of allowedKeys.length > 0 ? allowedKeys : Object.keys(params)) {
+    const value = String(params[key] ?? '').trim();
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  }
+
+  if (baseUrl.includes('/v1/mock-test')) {
+    url.searchParams.set('sort', 'priority.desc');
+  }
+
+  return url.toString();
+}
+
+function buildMockTestDetailUrl(id) {
+  return `https://api.youpass.vn/v1/mock-test/${encodeURIComponent(String(id ?? '').trim())}`;
 }
 
 function sanitizeFileNamePart(value) {
@@ -3140,35 +3333,122 @@ async function fetchQuizList({ listUrl, token }) {
   return response.json();
 }
 
-async function buildBulkZip({ listUrl, token }) {
-  const listResult = await fetchQuizList({ listUrl, token });
-  const quizzes = extractQuizListItems(listResult);
-  if (quizzes.length === 0) {
-    throw new Error('Khong tim thay danh sach quiz hop le trong API');
+async function fetchMockTestDetail({ id, token }) {
+  const response = await fetch(buildMockTestDetailUrl(id), {
+    headers: {
+      Authorization: normalizeAuthorizationToken(token),
+      Accept: 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Mock test detail tra ve HTTP ${response.status}`);
   }
 
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('Mock test detail khong tra ve JSON');
+  }
+
+  return response.json();
+}
+
+async function buildBulkZip({ pageSize, startPage, fixedParams = {}, skill, token }) {
   const zip = new JSZip();
   const errors = [];
+  const seenIds = new Set();
   let addedCount = 0;
+  let currentPage = Number.parseInt(startPage, 10);
+  if (!Number.isInteger(currentPage) || currentPage < 1) {
+    currentPage = 1;
+  }
 
-  for (const item of quizzes) {
-    const id = String(item?.id ?? item?.quiz_id ?? item?.quizId ?? '').trim();
-    if (!id) {
-      continue;
+  const resolvedPageSize = Number.parseInt(pageSize, 10);
+  const safePageSize = Number.isInteger(resolvedPageSize) && resolvedPageSize > 0 ? resolvedPageSize : 20;
+  const apiConfig = getBulkApiConfig(skill);
+  const quizTypeOverride = normalizeSkillValue(skill);
+  let total = null;
+  let fetchedCount = 0;
+
+  while (total === null || fetchedCount < total) {
+    const listUrl = buildFixedBulkListUrl({
+      ...apiConfig.params,
+      ...fixedParams,
+      page_size: safePageSize,
+      page: currentPage
+    }, apiConfig.baseUrl, apiConfig.allowedKeys);
+
+    const listResult = await fetchQuizList({ listUrl, token });
+    const items = extractQuizListItems(listResult, skill);
+
+    if (total === null) {
+      total = extractQuizListTotal(listResult);
     }
 
-    try {
-      const result = await fetchELearningResult({ id, token });
-      const title = htmlToText(result?.data?.title || item?.title || `quiz-${id}`);
-      const quizTypeOverride = resolveQuizType(result?.data?.quiz_type).key || '';
-      const docx = await createDocx({ id, result, quizTypeOverride });
-      const fileName = `${sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`}.docx`;
-
-      zip.file(fileName, docx);
-      addedCount += 1;
-    } catch (error) {
-      errors.push(`${id}: ${error.message}`);
+    if (items.length === 0) {
+      break;
     }
+
+    for (const item of items) {
+      const isWriting = normalizeSkillValue(skill) === 'writing';
+      if (!isWriting) {
+        const entries = extractMockTestEntries(item, skill);
+        for (const entry of entries) {
+          const seedId = extractMockTestGroupId(entry);
+          if (!seedId) {
+            continue;
+          }
+
+          try {
+            const detailResult = await fetchMockTestDetail({ id: seedId, token });
+            const finalId = extractMockTestFinalId(detailResult);
+            const exportId = finalId || seedId;
+            if (!exportId || seenIds.has(exportId)) {
+              continue;
+            }
+
+            seenIds.add(exportId);
+            const result = await fetchELearningResult({ id: exportId, token });
+            const title = htmlToText(result?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
+            const docx = await createDocx({ id: exportId, result, quizTypeOverride });
+            const fileName = `${sanitizeFileNamePart(`${exportId} - ${title}`) || `quiz-${exportId}`}.docx`;
+
+            zip.file(fileName, docx);
+            addedCount += 1;
+          } catch (error) {
+            errors.push(`${seedId}: ${error.message}`);
+          }
+        }
+        continue;
+      }
+
+      const id = String(item?.id ?? item?.quiz_id ?? item?.quizId ?? '').trim();
+      if (!id || seenIds.has(id)) {
+        continue;
+      }
+
+      seenIds.add(id);
+
+      try {
+        const result = await fetchELearningResult({ id, token });
+        const title = htmlToText(result?.data?.title || item?.title || `quiz-${id}`);
+        const docx = await createDocx({ id, result, quizTypeOverride });
+        const fileName = `${sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`}.docx`;
+
+        zip.file(fileName, docx);
+        addedCount += 1;
+      } catch (error) {
+        errors.push(`${id}: ${error.message}`);
+      }
+    }
+
+    fetchedCount += items.length;
+
+    if (total !== null && fetchedCount >= total) {
+      break;
+    }
+
+    currentPage += 1;
   }
 
   if (addedCount === 0) {
@@ -3227,15 +3507,21 @@ export async function handleRequest(request, response) {
     if (request.method === 'POST' && requestUrl.pathname === '/export-bulk') {
       const body = await collectBody(request);
       const form = new URLSearchParams(body);
-      const listUrl = String(form.get('listUrl') || '').trim();
+      const skill = String(form.get('skill') || '').trim();
+      const fixedParams = {
+        types: form.get('types'),
+        quiz_types: form.get('quiz_types'),
+        writing_task_type: form.get('writing_task_type'),
+        submitted_status: form.get('submitted_status')
+      };
       const token = String(form.get('token') || '').trim();
 
-      if (!listUrl || !token) {
-        send(response, 400, renderBulkForm('Vui long nhap day du API danh sach va token.'), contentTypes.html);
+      if (!skill || !token) {
+        send(response, 400, renderBulkForm('Vui long nhap day du tham so va token.'), contentTypes.html);
         return;
       }
 
-      const zip = await buildBulkZip({ listUrl, token });
+      const zip = await buildBulkZip({ fixedParams, skill, token });
       const zipName = `e-learning-bulk-${Date.now()}.zip`;
 
       send(response, 200, zip, 'application/zip', {
