@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 import { decodeHtmlEntities, htmlToText, splitTextLines } from './helper.js';
-import { formatOptionText, normalizeChoiceLabel } from './reading.js';
+import { formatOptionText, isReadingRawType, normalizeChoiceLabel } from './reading.js';
 
 export function escapeXml(value) {
   return String(value ?? '')
@@ -11,6 +11,11 @@ export function escapeXml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
+}
+
+export function resolveEffectiveQuizType(quizTypeOverride, fallbackQuizType) {
+  const normalizedOverride = String(quizTypeOverride ?? '').trim();
+  return normalizedOverride || fallbackQuizType;
 }
 
 export function paragraph(text) {
@@ -1095,9 +1100,10 @@ export function appendQuestionTypeLog(rows = [], filePath = 'logs/e-learning-que
 
   const lines = Array.isArray(rows)
     ? rows.map((row) => {
-        const questionOrder = String(row?.questionOrder ?? '').trim();
         const rawTypeKey = String(row?.rawTypeKey ?? '').trim();
-        return [String(id ?? '').trim(), questionOrder, rawTypeKey].join(' | ');
+        const questionOrder = String(row?.questionOrder ?? '').trim();
+        const startOrder = questionOrder.match(/\d+/)?.[0] || '';
+        return [String(id ?? '').trim(), rawTypeKey, startOrder].join(' | ');
       }).filter((line) => line.trim() && !line.endsWith(' | '))
     : [];
 
@@ -1106,7 +1112,9 @@ export function appendQuestionTypeLog(rows = [], filePath = 'logs/e-learning-que
     if (directory && !existsSync(directory)) {
       mkdirSync(directory, { recursive: true });
     }
-    writeFileSync(filePath, `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`, 'utf8');
+    if (lines.length > 0) {
+      appendFileSync(filePath, `${lines.join('\n')}\n`, 'utf8');
+    }
     return filePath;
   } catch {
     return '';
@@ -1133,58 +1141,23 @@ export function resetDocxRenderLog(filePath = 'logs/e-learning-render-docx.log',
 export function summarizeQuestionTypes(resultLines = []) {
   const summaries = [];
   const seen = new Set();
-  let current = null;
 
   for (const line of Array.isArray(resultLines) ? resultLines : []) {
     if (!line || typeof line !== 'object') {
       continue;
     }
 
-    if (line.type === 'questionTitle') {
-      current = {
-        questionTitle: String(line.text ?? ''),
-        questionOrder: String(line.order ?? '').trim() || String(line.text ?? '').match(/\d+/)?.[0] || '',
-        questionText: '',
-        answer: '',
-        keywords: [],
-        rawTypeKey: ''
-      };
-      continue;
-    }
-
-    if (!current) {
-      continue;
-    }
-
-    if (line.type === 'questionText' && !current.questionText) {
-      current.questionText = String(line.text ?? '');
-      continue;
-    }
-
-    if (line.type === 'questionAnswerBlock' && !current.answer) {
-      current.answer = String(line.answer ?? '');
-      continue;
-    }
-
-    if (line.type === 'questionKeywordsBlock' && current.keywords.length === 0 && Array.isArray(line.keywords)) {
-      current.keywords = line.keywords.map((item) => String(item ?? '')).filter(Boolean);
-      continue;
-    }
-
-    if (line.type === 'questionExplanationBlock') {
+    if (line.type === 'questionGroup') {
       const rawTypeKey = String(line.rawTypeKey ?? '').trim();
-      if (!rawTypeKey || seen.has(rawTypeKey)) {
+      const questionOrder = String(line.questionOrder ?? '').trim();
+      if (!rawTypeKey || !questionOrder || isReadingRawType(rawTypeKey) || seen.has(rawTypeKey)) {
         continue;
       }
 
       seen.add(rawTypeKey);
       summaries.push({
         rawTypeKey,
-        questionOrder: current.questionOrder,
-        questionTitle: current.questionTitle,
-        questionText: current.questionText,
-        answer: current.answer,
-        keywords: current.keywords
+        questionOrder
       });
     }
   }
@@ -1245,7 +1218,8 @@ export function createDocxCore(deps) {
 
   return {
     async createDocx({ id, result, quizTypeOverride }) {
-      const quizType = quizTypeOverride ?? result?.data?.quiz_type;
+      const quizType = resolveEffectiveQuizType(quizTypeOverride, result?.data?.quiz_type);
+      console.log('[createDocx]', { id, quizTypeOverride, quizType });
       const imageRegistry = await buildImageRegistry(result);
       const coverLines = buildCoverPageLines({
         quizType,

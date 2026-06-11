@@ -77,8 +77,13 @@ export function createExportMultiCore(deps) {
             try {
               const detailResult = await fetchMockTestDetail({ id: seedId, token, normalizeAuthorizationToken });
               const finalId = extractMockTestFinalId(detailResult);
-              const exportId = finalId || seedId;
-              if (!exportId || seenIds.has(exportId)) {
+              const exportId = String(finalId || '').trim();
+              if (!exportId) {
+                errors.push(`${seedId}: khong tim thay data.quizzes.full.id`);
+                continue;
+              }
+
+              if (seenIds.has(exportId)) {
                 continue;
               }
 

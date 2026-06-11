@@ -1,5 +1,5 @@
 import { decodeHtmlEntities, htmlToText, htmlToTextWithBlankPlaceholders, htmlWithBlankPlaceholders, splitTextLines } from './helper.js';
-import { normalizeExplanationHtml } from './common.js';
+import { normalizeExplanationHtml, resolveEffectiveQuizType } from './common.js';
 import { QUIZ_TYPE_LABELS, QUIZ_TYPE_KEYS, resolveQuizType } from '../quiz-types.js';
 
 function collectHtmlContent(value, htmlToText) {
@@ -43,32 +43,56 @@ const IELTS_TYPES = {
   10: 'Note / Table / Flow Completion'
 };
 
-const YOUPASS_QUESTION_TYPES = {
-  MULTIPLE_CHOICE: IELTS_TYPES[1],
-  MULTIPLE_CHOICE_ONE: IELTS_TYPES[1],
-  MULTIPLE_SELECTION: IELTS_TYPES[1],
-  SINGLE_CHOICE: IELTS_TYPES[1],
-  SINGLE_SELECTION: IELTS_TYPES[1],
-  TRUE_FALSE_NOT_GIVEN: IELTS_TYPES[2],
-  YES_NO_NOT_GIVEN: IELTS_TYPES[2],
-  MATCHING_HEADINGS: IELTS_TYPES[3],
-  MATCHING_HEADING: IELTS_TYPES[3],
-  MATCHING_NAMES: IELTS_TYPES[6],
-  MATCHING_INFO: IELTS_TYPES[6],
-  SENTENCE_MATCHING: IELTS_TYPES[6],
-  FILL_BLANK: IELTS_TYPES[5],
-  FILL_IN_THE_BLANK: IELTS_TYPES[5],
-  SENTENCE_COMPLETION: IELTS_TYPES[5],
-  SHORT_ANSWER: IELTS_TYPES[4],
-  LABELING_DIAGRAM: IELTS_TYPES[7],
-  LABELLING_DIAGRAM: IELTS_TYPES[7],
-  SUMMARY_COMPLETION: IELTS_TYPES[8],
-  DIAGRAM_COMPLETION: IELTS_TYPES[9],
-  NOTE_COMPLETION: IELTS_TYPES[10],
-  TABLE_COMPLETION: IELTS_TYPES[10],
-  FLOW_COMPLETION: IELTS_TYPES[10],
-  OTHERS: IELTS_TYPES[4]
-};
+export const READING_RAW_TYPE_DEFINITIONS = Object.freeze([
+  { rawType: 'MULTIPLE_CHOICE', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'MULTIPLE_CHOICE_ONE', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'MULTIPLE_SELECTION', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'SINGLE_CHOICE', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'SINGLE_SELECTION', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'TRUE_FALSE_NOT_GIVEN', label: IELTS_TYPES[2], ieltsType: 2 },
+  { rawType: 'YES_NO_NOT_GIVEN', label: IELTS_TYPES[2], ieltsType: 2 },
+  { rawType: 'MATCHING_HEADINGS', label: IELTS_TYPES[3], ieltsType: 3 },
+  { rawType: 'MATCHING_HEADING', label: IELTS_TYPES[3], ieltsType: 3 },
+  { rawType: 'MATCHING_NAMES', label: IELTS_TYPES[6], ieltsType: 6 },
+  { rawType: 'MATCHING_INFO', label: IELTS_TYPES[6], ieltsType: 6 },
+  { rawType: 'SENTENCE_MATCHING', label: IELTS_TYPES[6], ieltsType: 6 },
+  { rawType: 'FILL_BLANK', label: IELTS_TYPES[5], ieltsType: 5 },
+  { rawType: 'FILL_IN_THE_BLANK', label: IELTS_TYPES[5], ieltsType: 5 },
+  { rawType: 'GAP_FILLING', label: IELTS_TYPES[5], ieltsType: 5 },
+  { rawType: 'SENTENCE_COMPLETION', label: IELTS_TYPES[5], ieltsType: 5 },
+  { rawType: 'SHORT_ANSWER', label: IELTS_TYPES[4], ieltsType: 4 },
+  { rawType: 'LABELING_DIAGRAM', label: IELTS_TYPES[7], ieltsType: 7 },
+  { rawType: 'LABELLING_DIAGRAM', label: IELTS_TYPES[7], ieltsType: 7 },
+  { rawType: 'SUMMARY_COMPLETION', label: IELTS_TYPES[8], ieltsType: 8 },
+  { rawType: 'DIAGRAM_COMPLETION', label: IELTS_TYPES[9], ieltsType: 9 },
+  { rawType: 'NOTE_COMPLETION', label: IELTS_TYPES[10], ieltsType: 10 },
+  { rawType: 'TABLE_COMPLETION', label: IELTS_TYPES[10], ieltsType: 10 },
+  { rawType: 'FLOW_COMPLETION', label: IELTS_TYPES[10], ieltsType: 10 },
+  { rawType: 'MATCHING_FEATURES', label: 'Matching Features', ieltsType: 6 },
+  { rawType: 'MATCHING_ENDINGS', label: 'Matching Endings', ieltsType: 6 },
+  { rawType: 'MULTIPLE_CHOICE_MANY', label: IELTS_TYPES[1], ieltsType: 1 },
+  { rawType: 'MAP_DIAGRAM_LABEL', label: IELTS_TYPES[7], ieltsType: 7 },
+  { rawType: 'YES_NO', label: IELTS_TYPES[2], ieltsType: 2 },
+  { rawType: 'TRUE_FALSE', label: IELTS_TYPES[2], ieltsType: 2 },
+  { rawType: 'OTHERS', label: IELTS_TYPES[4], ieltsType: 4 }
+]);
+
+export const YOUPASS_QUESTION_TYPES = Object.freeze(
+  Object.fromEntries(READING_RAW_TYPE_DEFINITIONS.map(({ rawType, label }) => [rawType, label]))
+);
+
+export function getReadingRawTypeDefinition(rawType) {
+  const normalizedRawType = normalizeTypeKey(rawType);
+  if (!normalizedRawType) {
+    return null;
+  }
+
+  return READING_RAW_TYPE_DEFINITIONS.find((definition) => definition.rawType === normalizedRawType) || null;
+}
+
+export function isReadingRawType(rawType) {
+  return Boolean(getReadingRawTypeDefinition(rawType));
+}
 
 export function splitPassageContent(part, data) {
   const bodyLines = extractVocabPassageLines(part.vocabs);
@@ -261,9 +285,9 @@ export function getQuestionTypeLabel(question) {
       return IELTS_TYPES[numericType];
     }
 
-    const key = normalizeTypeKey(candidate);
-    if (YOUPASS_QUESTION_TYPES[key]) {
-      return YOUPASS_QUESTION_TYPES[key];
+    const definition = getReadingRawTypeDefinition(candidate);
+    if (definition) {
+      return definition.label;
     }
   }
 
@@ -505,6 +529,8 @@ export function getQuestionOrderRange(answers, fallbackOrder) {
 
 export function formatQuestionGroupLines(question, answers) {
   const typeLabel = getQuestionRawTypeText(question);
+  const rawTypeKey = getQuestionRawTypeKey(question);
+  const questionOrder = getQuestionOrderRange(answers, question.order);
   const descriptionHtml = String(question.description ?? '').trim();
   const descriptionLines = splitTextLines(htmlToText(descriptionHtml));
   const hasHtml = /<\/?[a-z][\s\S]*>/i.test(descriptionHtml);
@@ -513,14 +539,24 @@ export function formatQuestionGroupLines(question, answers) {
     if (typeLabel && /^Questions?\s+\d/i.test(descriptionLines[0])) {
       const firstLine = descriptionLines[0].replaceAll(/:\s*$/g, '');
       return [
-        `${firstLine}: ${typeLabel}`,
+        {
+          type: 'questionGroup',
+          text: `${firstLine}: ${typeLabel}`,
+          rawTypeKey,
+          questionOrder
+        },
         ...(hasHtml ? [{ type: 'questionDescriptionHtml', html: descriptionHtml }] : descriptionLines.slice(1))
       ];
     }
 
     if (typeLabel) {
       return [
-        `Type: ${typeLabel}`,
+        {
+          type: 'questionGroup',
+          text: `Type: ${typeLabel}`,
+          rawTypeKey,
+          questionOrder
+        },
         ...(hasHtml ? [{ type: 'questionDescriptionHtml', html: descriptionHtml }] : descriptionLines)
       ];
     }
@@ -538,10 +574,20 @@ export function formatQuestionGroupLines(question, answers) {
 
   const orderRange = getQuestionOrderRange(answers, question.order);
   if (!orderRange.includes('-')) {
-    return [`Type: ${typeLabel}`];
+    return [{
+      type: 'questionGroup',
+      text: `Type: ${typeLabel}`,
+      rawTypeKey,
+      questionOrder: orderRange
+    }];
   }
 
-  return [`Questions ${orderRange}: ${typeLabel}`];
+  return [{
+    type: 'questionGroup',
+    text: `Questions ${orderRange}: ${typeLabel}`,
+    rawTypeKey,
+    questionOrder: orderRange
+  }];
 }
 
 export function pushQuestionGroupLines(lines, question, answers) {
@@ -958,7 +1004,7 @@ export function createReadingCore() {
   function formatYouPassResult(result, quizTypeOverride) {
     const data = result?.data ?? result;
     const parts = extractYouPassParts(data);
-    const quizTypeKey = resolveQuizType(quizTypeOverride ?? data?.quiz_type).key;
+    const quizTypeKey = resolveQuizType(resolveEffectiveQuizType(quizTypeOverride, data?.quiz_type)).key;
     const useReadingExplanation = quizTypeKey === 'reading';
     const lines = [];
 
@@ -1026,7 +1072,7 @@ export function createReadingCore() {
                 ? `- [__${order}__]`
                 : formatGapQuestionLabel(answer.questionText, order, rawTypeKey);
 
-              lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order });
+              lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
               lines.push({ type: 'questionText', text: questionLabel });
               addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer }, useReadingExplanation);
               if (order) {
@@ -1097,7 +1143,7 @@ export function createReadingCore() {
             }
 
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
               if (fallback) {
                 lines.push({ type: 'questionText', text: fallback });
               }
@@ -1118,7 +1164,7 @@ export function createReadingCore() {
           if (answers.length === 0 && choiceOptions.length > 0) {
             if (!emittedQuestionOrders.has(String(question.order))) {
               pushQuestionGroupLines(lines, question, [{ order: question.order }]);
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
               if (fallback) {
                 lines.push({ type: 'questionText', text: fallback });
               }
@@ -1167,7 +1213,7 @@ export function createReadingCore() {
                 });
                 emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
               }
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
               lines.push({
                 type: 'questionText',
                 text: fallback || `- [__${question.order}__]`
@@ -1195,7 +1241,7 @@ export function createReadingCore() {
 
           answers.forEach((answer, index) => {
             const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
-            lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order });
+            lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
             lines.push({ type: 'questionText', text: formatGapQuestionLabel(answer.questionText, order, rawTypeKey) });
             if (isMultipleChoiceOne) {
               labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
@@ -1234,7 +1280,7 @@ export function createReadingCore() {
 
   function buildCleanExportRecord({ id, result, quizTypeOverride }) {
     const data = result?.data ?? result ?? {};
-    const quizType = resolveQuizType(quizTypeOverride ?? data?.quiz_type);
+    const quizType = resolveQuizType(resolveEffectiveQuizType(quizTypeOverride, data?.quiz_type));
 
     const parts = extractYouPassParts(data).map((part, partIndex) => {
       const passage = splitPassageContent(part, data);
