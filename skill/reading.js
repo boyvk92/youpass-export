@@ -138,6 +138,16 @@ export function extractVocabPassageLines(vocabs) {
   return firstParagraphIndex >= 0 ? lines.slice(firstParagraphIndex) : lines;
 }
 
+export function numberGapPlaceholdersInHtml(html, startOrder = 1) {
+  const source = String(html ?? '');
+  let current = Number(startOrder) || 1;
+
+  return source
+    .replace(/<span\b[^>]*class="[^"]*gap-placeholder[^"]*"[^>]*>[\s_-]*<\/span>/gi, () => `___[${current++}]___`)
+    .replace(/_{6,}/g, () => `___[${current++}]___`)
+    .replace(/[-–—]{6,}/g, () => `___[${current++}]___`);
+}
+
 export function extractTextLines(node) {
   const lines = [];
 
@@ -262,7 +272,8 @@ export function getQuestionTypeLabel(question) {
 
 export function isFillInTheBlankQuestion(question) {
   return normalizeTypeKey(question.type) === 'FILL_IN_THE_BLANK'
-    || (normalizeTypeKey(question.question_type) === 'FILL_BLANK' && Boolean(question.gap_fill_in_blank));
+    || (normalizeTypeKey(question.question_type) === 'FILL_BLANK' && Boolean(question.gap_fill_in_blank))
+    || (normalizeTypeKey(question.question_type) === 'GAP_FILLING' && Boolean(question.gap_fill_in_blank));
 }
 
 export function normalizeChoiceLabel(value) {
@@ -471,6 +482,10 @@ export function extractMarkedAnswers(html) {
   }
 
   return answers;
+}
+
+export function formatSelectionOptions(question) {
+  return formatMultipleChoiceManyOptions(question);
 }
 
 export function getQuestionOrderRange(answers, fallbackOrder) {
@@ -727,6 +742,24 @@ export function addExplanationLines(lines, question, order, explanationsByOrder,
   }
 }
 
+function formatGapQuestionLabel(questionText, order, rawTypeKey) {
+  const text = String(questionText ?? '').trim();
+  const blankLabel = order ? `___[${order}]___` : '___[ ]___';
+  if (!text) {
+    return blankLabel;
+  }
+
+  if (/^[_\-\s–—]+$/.test(text)) {
+    return blankLabel;
+  }
+
+  if (rawTypeKey === 'GAP_FILLING') {
+    return text.replace(/_{3,}|-{3,}|—{3,}|–{3,}/g, blankLabel);
+  }
+
+  return text;
+}
+
 export function formatAreaOfInformation(question) {
   const ranges = question.locate_info?.paragraph_ranges;
   if (!Array.isArray(ranges) || ranges.length === 0) {
@@ -829,7 +862,13 @@ export function getPartQuestions(part) {
   };
 
   const normalizeFromSet = (questionSet, question, index) => {
-    const sharedQuestionContent = collectHtmlContent(questionSet.content);
+    const questionStartOrder = (questionSet.questions || [])
+      .map((item) => Number(item?.order))
+      .find((value) => Number.isFinite(value) && value > 0) || 1;
+    const sharedQuestionContent = numberGapPlaceholdersInHtml(
+      collectHtmlContent(questionSet.content),
+      questionStartOrder
+    );
     const sharedQuestionGroupKey = questionSet.id || questionSet.title || questionSet.question_set_id || '';
 
     return {
@@ -950,7 +989,9 @@ export function createReadingCore() {
         lines.push({ type: 'heading', text: 'Questions and answers' });
         const emittedQuestionOrders = new Set();
         const emittedSharedOptionGroups = new Set();
+        const emittedSelectionOptionGroups = new Set();
         const emittedSharedQuestionGroups = new Set();
+        const emittedMatchingFeatureGroups = new Set();
         const explanationsByOrder = buildExplanationMap(partQuestions);
 
         for (const question of partQuestions) {
@@ -983,7 +1024,7 @@ export function createReadingCore() {
 
               const questionLabel = rawTypeKey === 'MAP_DIAGRAM_LABEL' && String(answer.questionText || '').trim() === '-' && order
                 ? `- [__${order}__]`
-                : answer.questionText;
+                : formatGapQuestionLabel(answer.questionText, order, rawTypeKey);
 
               lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
               lines.push({ type: 'questionText', text: questionLabel });
@@ -1003,6 +1044,8 @@ export function createReadingCore() {
           const fallback = htmlToText(question.text || question.content || question.title);
           const rawTypeKey = getQuestionRawTypeKey(question);
           const isMultipleChoiceOne = rawTypeKey === 'MULTIPLE_CHOICE_ONE';
+          const isMatchingFeatures = rawTypeKey === 'MATCHING_FEATURES';
+          const isSharedOptionGroup = isMatchingFeatures || rawTypeKey === 'MATCHING_ENDINGS';
           const singleChoiceOptions = normalizeTypeKey(question.question_type) === 'MULTIPLE_CHOICE_ONE'
             || normalizeTypeKey(question.type) === 'MULTIPLE_CHOICE_ONE'
             ? formatSingleChoiceRadio(question)
@@ -1010,18 +1053,67 @@ export function createReadingCore() {
           const multipleChoiceManyOptions = rawTypeKey === 'MULTIPLE_CHOICE_MANY'
             ? formatMultipleChoiceManyOptions(question)
             : [];
+          const sharedOptions = formatSharedOptions(question);
+          const selectionOptions = isMatchingFeatures
+            ? formatSelectionOptions(question)
+            : [];
+          const matchingFeatureOptions = isSharedOptionGroup
+            ? (sharedOptions.length > 0 ? sharedOptions : selectionOptions)
+            : [];
+          const renderSharedOptions = isSharedOptionGroup ? matchingFeatureOptions : sharedOptions;
+          const matchingFeatureGroupKey = isSharedOptionGroup
+            ? String(question.shared_option_group_key || question.shared_question_group_key || question.question_set_id || question.group?.id || question.group?.type || question.order || '').trim()
+            : '';
           const choiceOptions = singleChoiceOptions.length > 0
             ? singleChoiceOptions
-            : (multipleChoiceManyOptions.length > 0 ? multipleChoiceManyOptions : formatChoiceOptions(question));
-          const sharedOptions = formatSharedOptions(question);
+            : (multipleChoiceManyOptions.length > 0
+              ? multipleChoiceManyOptions
+              : (isSharedOptionGroup && matchingFeatureOptions.length > 0
+                ? matchingFeatureOptions
+                : (selectionOptions.length > 0 ? selectionOptions : formatChoiceOptions(question))));
           const renderedChoiceOptions = isMultipleChoiceOne
             ? (singleChoiceOptions.length > 0 ? singleChoiceOptions : choiceOptions)
               : (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && multipleChoiceManyOptions.length > 0
                 ? multipleChoiceManyOptions
-                : (sharedOptions.length > 0 ? sharedOptions : choiceOptions))
-            ;
+                : (isSharedOptionGroup && matchingFeatureOptions.length > 0
+                  ? matchingFeatureOptions
+                  : (sharedOptions.length > 0 ? sharedOptions : choiceOptions)));
           const choiceAnswer = getChoiceAnswer(question, choiceOptions);
           const directAnswer = getDirectAnswer(question);
+
+          if (isSharedOptionGroup) {
+            if (!emittedMatchingFeatureGroups.has(matchingFeatureGroupKey)) {
+              pushQuestionGroupLines(lines, question, [{ order: question.order }]);
+              if (renderSharedOptions.length > 0) {
+                renderSharedOptions.forEach((option) => {
+                  lines.push({
+                    type: 'choice',
+                    text: formatOptionText(option),
+                    correct: false
+                  });
+                });
+              }
+              emittedMatchingFeatureGroups.add(matchingFeatureGroupKey);
+            }
+
+            if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
+              if (fallback) {
+                lines.push({ type: 'questionText', text: fallback });
+              }
+              addExplanationLines(lines, question, question.order, explanationsByOrder, {
+                answer: choiceAnswer,
+                questionText: fallback,
+                choices: renderedChoiceOptions.map((option) => ({
+                  ...option,
+                  displayText: formatOptionText(option),
+                  correct: option.correct || option.option === choiceAnswer
+                }))
+              }, useReadingExplanation);
+              emittedQuestionOrders.add(String(question.order));
+            }
+            continue;
+          }
 
           if (answers.length === 0 && choiceOptions.length > 0) {
             if (!emittedQuestionOrders.has(String(question.order))) {
@@ -1039,8 +1131,8 @@ export function createReadingCore() {
                   });
                 });
               } else {
-                pushSharedOptions(lines, sharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
-                if (sharedOptions.length === 0) {
+                pushSharedOptions(lines, renderSharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
+                if (renderSharedOptions.length === 0) {
                   choiceOptions.forEach((option) => {
                     lines.push({
                       type: 'choice',
@@ -1104,7 +1196,7 @@ export function createReadingCore() {
           answers.forEach((answer, index) => {
             const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
             lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
-            lines.push({ type: 'questionText', text: answer.questionText });
+            lines.push({ type: 'questionText', text: formatGapQuestionLabel(answer.questionText, order, rawTypeKey) });
             if (isMultipleChoiceOne) {
               labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
                 lines.push({
@@ -1114,7 +1206,7 @@ export function createReadingCore() {
                 });
               });
             } else if (rawTypeKey !== 'MULTIPLE_CHOICE_MANY') {
-              pushSharedOptions(lines, sharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
+              pushSharedOptions(lines, renderSharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
             }
             addExplanationLines(lines, question, order, explanationsByOrder, {
               answer: (isMultipleChoiceOne || rawTypeKey === 'MULTIPLE_CHOICE_MANY') ? '' : answer.answer,
@@ -1181,6 +1273,10 @@ export function createReadingCore() {
         const explanation = splitTextLines(htmlToText(question.explain));
         const choiceOptions = formatChoiceOptions(question);
         const sharedOptions = formatSharedOptions(question);
+        const selectionOptions = rawType === 'MATCHING_FEATURES' ? formatSelectionOptions(question) : [];
+        const matchingFeatureOptions = rawType === 'MATCHING_FEATURES'
+          ? (sharedOptions.length > 0 ? sharedOptions : selectionOptions)
+          : [];
         const selectionAnswers = formatSelectionQuestion(question);
         const markedAnswers = extractMarkedAnswers(question.gap_fill_in_blank);
         const directAnswer = getDirectAnswer(question);
@@ -1199,8 +1295,12 @@ export function createReadingCore() {
           questionText,
           blankText,
           selection: selectionAnswers,
-          choices: choiceOptions,
-          sharedOptions,
+          choices: rawType === 'MATCHING_FEATURES'
+            ? matchingFeatureOptions
+            : (selectionOptions.length > 0 ? selectionOptions : choiceOptions),
+          sharedOptions: rawType === 'MATCHING_FEATURES' && matchingFeatureOptions.length > 0
+            ? matchingFeatureOptions
+            : sharedOptions,
           areaOfInformation,
           keywords,
           explanation

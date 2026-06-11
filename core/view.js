@@ -105,12 +105,86 @@ export function renderForm(error = '') {
     <p style="margin:16px 0 0;"><a href="/bulk">Xuất nhiều file ZIP</a></p>
   </main>
   <script>
+    const filenameFromDisposition = (headerValue, fallback) => {
+      const value = String(headerValue || '');
+      const utf8Match = value.match(/filename\\*=UTF-8''([^;]+)/i);
+      if (utf8Match) {
+        try {
+          return decodeURIComponent(utf8Match[1]);
+        } catch {
+          return fallback;
+        }
+      }
+
+      const quotedMatch = value.match(/filename="([^"]+)"/i);
+      if (quotedMatch) {
+        return quotedMatch[1];
+      }
+
+      const plainMatch = value.match(/filename=([^;]+)/i);
+      return plainMatch ? plainMatch[1].trim() : fallback;
+    };
+
+    const downloadBlob = (blob, filename) => {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename || 'download';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    };
+
+    const submitAsDownload = async (form, button) => {
+      const originalText = button?.textContent || 'Dang xu ly...';
+      const formData = new FormData(form);
+      button.disabled = true;
+      button.textContent = button.dataset.busyText || originalText;
+
+      try {
+        const response = await fetch(form.action, {
+          method: form.method || 'POST',
+          body: formData
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok) {
+          if (contentType.includes('text/html')) {
+            document.open();
+            document.write(await response.text());
+            document.close();
+            return;
+          }
+          throw new Error(await response.text());
+        }
+
+        if (contentType.includes('application/zip') || contentType.includes('wordprocessingml.document')) {
+          const blob = await response.blob();
+          const fallbackName = contentType.includes('application/zip') ? 'export.zip' : 'export.docx';
+          downloadBlob(blob, filenameFromDisposition(response.headers.get('content-disposition'), fallbackName));
+          return;
+        }
+
+        const text = await response.text();
+        document.open();
+        document.write(text);
+        document.close();
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'Co loi xay ra khi xuat file.');
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    };
+
     document.querySelectorAll('form').forEach((form) => {
-      form.addEventListener('submit', () => {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
         const button = form.querySelector('button[type="submit"]');
         if (!button) return;
-        button.disabled = true;
-        button.textContent = button.dataset.busyText || 'Dang xu ly...';
+        submitAsDownload(form, button);
       });
     });
   </script>
@@ -256,12 +330,86 @@ export function renderBulkForm(error = '') {
       skillSelect.addEventListener('change', toggleWritingFields);
       toggleWritingFields();
     }
+    const filenameFromDisposition = (headerValue, fallback) => {
+      const value = String(headerValue || '');
+      const utf8Match = value.match(/filename\\*=UTF-8''([^;]+)/i);
+      if (utf8Match) {
+        try {
+          return decodeURIComponent(utf8Match[1]);
+        } catch {
+          return fallback;
+        }
+      }
+
+      const quotedMatch = value.match(/filename="([^"]+)"/i);
+      if (quotedMatch) {
+        return quotedMatch[1];
+      }
+
+      const plainMatch = value.match(/filename=([^;]+)/i);
+      return plainMatch ? plainMatch[1].trim() : fallback;
+    };
+
+    const downloadBlob = (blob, filename) => {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename || 'download';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    };
+
+    const submitAsDownload = async (form, button) => {
+      const originalText = button?.textContent || 'Dang xu ly...';
+      const formData = new FormData(form);
+      button.disabled = true;
+      button.textContent = button.dataset.busyText || originalText;
+
+      try {
+        const response = await fetch(form.action, {
+          method: form.method || 'POST',
+          body: formData
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok) {
+          if (contentType.includes('text/html')) {
+            document.open();
+            document.write(await response.text());
+            document.close();
+            return;
+          }
+          throw new Error(await response.text());
+        }
+
+        if (contentType.includes('application/zip') || contentType.includes('wordprocessingml.document')) {
+          const blob = await response.blob();
+          const fallbackName = contentType.includes('application/zip') ? 'export.zip' : 'export.docx';
+          downloadBlob(blob, filenameFromDisposition(response.headers.get('content-disposition'), fallbackName));
+          return;
+        }
+
+        const text = await response.text();
+        document.open();
+        document.write(text);
+        document.close();
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'Co loi xay ra khi xuat file.');
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    };
+
     document.querySelectorAll('form').forEach((form) => {
-      form.addEventListener('submit', () => {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
         const button = form.querySelector('button[type="submit"]');
         if (!button) return;
-        button.disabled = true;
-        button.textContent = button.dataset.busyText || 'Dang xu ly...';
+        submitAsDownload(form, button);
       });
     });
   </script>
