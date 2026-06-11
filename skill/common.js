@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 import { decodeHtmlEntities, htmlToText, splitTextLines } from './helper.js';
 import { formatOptionText, normalizeChoiceLabel } from './reading.js';
@@ -488,6 +488,8 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
   let runs = [];
   let style = { bold, italic: false, underline: false };
   const images = Array.isArray(imageRegistry) ? imageRegistry : [];
+  let inListItem = false;
+  let listItemPrefixPending = false;
 
   const findImageMeta = (src) => {
     const normalized = decodeHtmlEntities(String(src ?? '')).trim();
@@ -565,7 +567,19 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
 
       if (lower.startsWith('li')) {
         flush();
-        runs.push(runXml('- ', { bold: false, italic: false, underline: false, color, size }));
+        inListItem = true;
+        listItemPrefixPending = true;
+        continue;
+      }
+
+      if (lower.startsWith('/li')) {
+        flush();
+        inListItem = false;
+        listItemPrefixPending = false;
+        continue;
+      }
+
+      if (inListItem && (isBlockStart(lower) || isBlockEnd(lower))) {
         continue;
       }
 
@@ -574,6 +588,12 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
         continue;
       }
 
+      continue;
+    }
+
+    if (inListItem && listItemPrefixPending) {
+      pushRun(`- ${token}`);
+      listItemPrefixPending = false;
       continue;
     }
 
@@ -1068,6 +1088,110 @@ export function appendDocxRenderLog(record, filePath = 'logs/e-learning-render-d
   }
 }
 
+export function appendQuestionTypeLog(rows = [], filePath = 'logs/e-learning-question-types.log', enableFileLogs = true, id = '') {
+  if (!enableFileLogs) {
+    return '';
+  }
+
+  const lines = Array.isArray(rows)
+    ? rows.map((row) => {
+        const questionOrder = String(row?.questionOrder ?? '').trim();
+        const rawTypeKey = String(row?.rawTypeKey ?? '').trim();
+        return [String(id ?? '').trim(), questionOrder, rawTypeKey].join(' | ');
+      }).filter((line) => line.trim() && !line.endsWith(' | '))
+    : [];
+
+  try {
+    const directory = filePath.split('/').slice(0, -1).join('/');
+    if (directory && !existsSync(directory)) {
+      mkdirSync(directory, { recursive: true });
+    }
+    writeFileSync(filePath, `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`, 'utf8');
+    return filePath;
+  } catch {
+    return '';
+  }
+}
+
+export function resetDocxRenderLog(filePath = 'logs/e-learning-render-docx.log', enableFileLogs = true) {
+  if (!enableFileLogs) {
+    return '';
+  }
+
+  try {
+    const directory = filePath.split('/').slice(0, -1).join('/');
+    if (directory && !existsSync(directory)) {
+      mkdirSync(directory, { recursive: true });
+    }
+    writeFileSync(filePath, '', 'utf8');
+    return filePath;
+  } catch {
+    return '';
+  }
+}
+
+export function summarizeQuestionTypes(resultLines = []) {
+  const summaries = [];
+  const seen = new Set();
+  let current = null;
+
+  for (const line of Array.isArray(resultLines) ? resultLines : []) {
+    if (!line || typeof line !== 'object') {
+      continue;
+    }
+
+    if (line.type === 'questionTitle') {
+      current = {
+        questionTitle: String(line.text ?? ''),
+        questionOrder: String(line.order ?? '').trim() || String(line.text ?? '').match(/\d+/)?.[0] || '',
+        questionText: '',
+        answer: '',
+        keywords: [],
+        rawTypeKey: ''
+      };
+      continue;
+    }
+
+    if (!current) {
+      continue;
+    }
+
+    if (line.type === 'questionText' && !current.questionText) {
+      current.questionText = String(line.text ?? '');
+      continue;
+    }
+
+    if (line.type === 'questionAnswerBlock' && !current.answer) {
+      current.answer = String(line.answer ?? '');
+      continue;
+    }
+
+    if (line.type === 'questionKeywordsBlock' && current.keywords.length === 0 && Array.isArray(line.keywords)) {
+      current.keywords = line.keywords.map((item) => String(item ?? '')).filter(Boolean);
+      continue;
+    }
+
+    if (line.type === 'questionExplanationBlock') {
+      const rawTypeKey = String(line.rawTypeKey ?? '').trim();
+      if (!rawTypeKey || seen.has(rawTypeKey)) {
+        continue;
+      }
+
+      seen.add(rawTypeKey);
+      summaries.push({
+        rawTypeKey,
+        questionOrder: current.questionOrder,
+        questionTitle: current.questionTitle,
+        questionText: current.questionText,
+        answer: current.answer,
+        keywords: current.keywords
+      });
+    }
+  }
+
+  return summaries;
+}
+
 export function formatResult(result) {
   if (!result) {
     return ['Chua co endpoint e-learning. Dat bien moi truong E_LEARNING_API_URL de tool tu dong lay du lieu.'];
@@ -1112,6 +1236,10 @@ export function createDocxCore(deps) {
     paragraph,
     formatResult,
     appendDocxRenderLog,
+    appendQuestionTypeLog,
+    enableFileLogs = true,
+    renderLogFile = 'logs/e-learning-render-docx.log',
+    questionTypesLogFile = 'logs/e-learning-question-types.log',
     createZip
   } = deps;
 
@@ -1222,13 +1350,18 @@ export function createDocxCore(deps) {
           : [heading('Noi dung'), ...formatResult(result).map(paragraph)])
       ].join('');
 
+      const questionTypes = summarizeQuestionTypes(resultLines);
+
       appendDocxRenderLog({
         exportedAt: new Date().toISOString(),
         id,
         quizType,
         coverLines,
-        resultLines
-      });
+        resultLines,
+        questionTypes
+      }, renderLogFile, enableFileLogs);
+
+      appendQuestionTypeLog(questionTypes, questionTypesLogFile, enableFileLogs, id);
 
       const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">

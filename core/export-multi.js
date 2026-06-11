@@ -8,6 +8,8 @@ import {
   fetchMockTestDetail,
   fetchQuizList,
   fetchELearningResult,
+  resetTextLogFile,
+  appendJsonLogLine,
   getBulkApiConfig,
   normalizeSkillValue,
   normalizeAuthorizationToken,
@@ -18,7 +20,12 @@ export function createExportMultiCore(deps) {
   const {
     htmlToText,
     createDocx,
-    apiUrl
+    apiUrl,
+    buildCleanExportRecord,
+    enableFileLogs = true,
+    exportLogFile = 'logs/e-learning-export-log.log',
+    renderLogFile = 'logs/e-learning-render-docx.log',
+    questionTypesLogFile = 'logs/e-learning-question-types.log'
   } = deps;
 
   async function buildBulkZip({ fixedParams = {}, skill, token }) {
@@ -33,6 +40,10 @@ export function createExportMultiCore(deps) {
     const quizTypeOverride = normalizeSkillValue(skill);
     let total = null;
     let fetchedCount = 0;
+
+    resetTextLogFile(exportLogFile, enableFileLogs);
+    resetTextLogFile(renderLogFile, enableFileLogs);
+    resetTextLogFile(questionTypesLogFile, enableFileLogs);
 
     while (total === null || fetchedCount < total) {
       const listUrl = buildFixedBulkListUrl({
@@ -74,6 +85,9 @@ export function createExportMultiCore(deps) {
               seenIds.add(exportId);
               const result = await fetchELearningResult({ apiUrl, id: exportId, token });
               const title = htmlToText(result?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
+              if (typeof buildCleanExportRecord === 'function') {
+                appendJsonLogLine(buildCleanExportRecord({ id: exportId, result, quizTypeOverride }), exportLogFile, enableFileLogs);
+              }
               const docx = await createDocx({ id: exportId, result, quizTypeOverride });
               const fileName = `${sanitizeFileNamePart(`${exportId} - ${title}`) || `quiz-${exportId}`}.docx`;
 
@@ -96,6 +110,9 @@ export function createExportMultiCore(deps) {
         try {
           const result = await fetchELearningResult({ apiUrl, id, token });
           const title = htmlToText(result?.data?.title || item?.title || `quiz-${id}`);
+          if (typeof buildCleanExportRecord === 'function') {
+            appendJsonLogLine(buildCleanExportRecord({ id, result, quizTypeOverride }), exportLogFile, enableFileLogs);
+          }
           const docx = await createDocx({ id, result, quizTypeOverride });
           const fileName = `${sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`}.docx`;
 

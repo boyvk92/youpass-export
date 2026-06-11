@@ -139,13 +139,20 @@ export function renderForm(error = '') {
     const submitAsDownload = async (form, button) => {
       const originalText = button?.textContent || 'Dang xu ly...';
       const formData = new FormData(form);
+      const body = new URLSearchParams();
+      for (const [key, value] of formData.entries()) {
+        body.append(key, String(value ?? ''));
+      }
       button.disabled = true;
       button.textContent = button.dataset.busyText || originalText;
 
       try {
         const response = await fetch(form.action, {
           method: form.method || 'POST',
-          body: formData
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+          },
+          body
         });
 
         const contentType = response.headers.get('content-type') || '';

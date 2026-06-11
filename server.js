@@ -35,13 +35,20 @@ const exportDocsCore = createExportDocsCore({
   send,
   contentTypes,
   renderForm,
-  apiUrl: API_URL
+  apiUrl: API_URL,
+  enableFileLogs: ENABLE_FILE_LOGS,
+  exportLogFile: 'logs/e-learning-export-log.log',
+  renderLogFile: 'logs/e-learning-render-docx.log'
 });
 
 const exportMultiCore = createExportMultiCore({
   htmlToText,
   createDocx: exportDocsCore.createDocx,
-  apiUrl: API_URL
+  buildCleanExportRecord: exportDocsCore.buildCleanExportRecord,
+  apiUrl: API_URL,
+  enableFileLogs: ENABLE_FILE_LOGS,
+  exportLogFile: 'logs/e-learning-export-log.log',
+  renderLogFile: 'logs/e-learning-render-docx.log'
 });
 
 async function collectBody(request) {
@@ -58,6 +65,68 @@ async function collectBody(request) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString();
+}
+
+function parseFormBody(request, body) {
+  const contentType = String(request.headers?.['content-type'] || '').toLowerCase();
+  if (!contentType.includes('multipart/form-data')) {
+    return new URLSearchParams(body);
+  }
+
+  const boundaryMatch = contentType.match(/boundary=([^;]+)/i);
+  if (!boundaryMatch) {
+    return new URLSearchParams(body);
+  }
+
+  const boundary = `--${boundaryMatch[1].replaceAll(/^"|"$/g, '')}`;
+  const form = new URLSearchParams();
+
+  for (const chunk of String(body || '').split(boundary)) {
+    const part = chunk.trim();
+    if (!part || part === '--') {
+      continue;
+    }
+
+    const separatorIndex = part.indexOf('\r\n\r\n');
+    if (separatorIndex < 0) {
+      continue;
+    }
+
+    const headerBlock = part.slice(0, separatorIndex);
+    const valueBlock = part.slice(separatorIndex + 4).replace(/\r\n--$/, '').trimEnd();
+    const nameMatch = headerBlock.match(/name="([^"]+)"/i);
+    if (!nameMatch) {
+      continue;
+    }
+
+    form.append(nameMatch[1], valueBlock.replace(/\r\n$/, ''));
+  }
+
+  return form;
+}
+
+function getFormFieldValue(body, form, name) {
+  const parsedValue = String(form?.get?.(name) || '').trim();
+  if (parsedValue) {
+    return parsedValue;
+  }
+
+  const raw = String(body || '');
+  const encodedMatch = raw.match(new RegExp(`(?:^|[?&])${name}=([^&\r\n]+)`, 'i'));
+  if (encodedMatch) {
+    try {
+      return decodeURIComponent(encodedMatch[1].replaceAll('+', ' ')).trim();
+    } catch {
+      return String(encodedMatch[1] || '').trim();
+    }
+  }
+
+  const multipartMatch = raw.match(new RegExp(`name="${name}"[^\\r\\n]*\\r\\n\\r\\n([\\s\\S]*?)(?:\\r\\n--|$)`, 'i'));
+  if (multipartMatch) {
+    return String(multipartMatch[1] || '').trim();
+  }
+
+  return '';
 }
 
 function send(response, statusCode, body, contentType = contentTypes.text, headers = {}) {
@@ -88,15 +157,15 @@ export async function handleRequest(request, response) {
 
     if (request.method === 'POST' && requestUrl.pathname === '/export-bulk') {
       const body = await collectBody(request);
-      const form = new URLSearchParams(body);
-      const skill = String(form.get('skill') || '').trim();
+      const form = parseFormBody(request, body);
+      const skill = getFormFieldValue(body, form, 'skill');
       const fixedParams = {
-        types: form.get('types'),
-        quiz_types: form.get('quiz_types'),
-        writing_task_type: form.get('writing_task_type'),
-        submitted_status: form.get('submitted_status')
+        types: getFormFieldValue(body, form, 'types'),
+        quiz_types: getFormFieldValue(body, form, 'quiz_types'),
+        writing_task_type: getFormFieldValue(body, form, 'writing_task_type'),
+        submitted_status: getFormFieldValue(body, form, 'submitted_status')
       };
-      const token = String(form.get('token') || '').trim();
+      const token = getFormFieldValue(body, form, 'token');
 
       if (!skill || !token) {
         send(response, 400, renderBulkForm('Vui long nhap day du tham so va token.'), contentTypes.html);

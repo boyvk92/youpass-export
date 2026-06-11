@@ -1,3 +1,5 @@
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+
 export function normalizeAuthorizationToken(token) {
   const trimmedToken = String(token || '').trim();
   return /^Bearer\s+/i.test(trimmedToken) ? trimmedToken : `Bearer ${trimmedToken}`;
@@ -46,6 +48,45 @@ export async function fetchELearningResult({ apiUrl, id, token }) {
   }
 
   return response.text();
+}
+
+function ensureLogDir(filePath) {
+  const directory = String(filePath || '').split('/').slice(0, -1).join('/');
+  if (!directory) {
+    return;
+  }
+
+  if (!existsSync(directory)) {
+    mkdirSync(directory, { recursive: true });
+  }
+}
+
+export function resetTextLogFile(filePath, enableFileLogs = true) {
+  if (!enableFileLogs) {
+    return '';
+  }
+
+  try {
+    ensureLogDir(filePath);
+    writeFileSync(filePath, '', 'utf8');
+    return filePath;
+  } catch {
+    return '';
+  }
+}
+
+export function appendJsonLogLine(record, filePath, enableFileLogs = true) {
+  if (!enableFileLogs) {
+    return '';
+  }
+
+  try {
+    ensureLogDir(filePath);
+    appendFileSync(filePath, `${JSON.stringify(record)}\n`, 'utf8');
+    return filePath;
+  } catch {
+    return '';
+  }
 }
 
 export function escapeHtml(value) {

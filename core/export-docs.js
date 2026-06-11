@@ -1,19 +1,7 @@
 import { buildCoverPageLines } from '../cover-page.js';
-import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, createZip } from '../skill/common.js';
+import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, appendQuestionTypeLog, summarizeQuestionTypes, createZip } from '../skill/common.js';
 import { createReadingCore, extractYouPassParts, splitPassageContent, getPartQuestions, isFillInTheBlankQuestion, getQuestionRawTypeKey, extractMarkedAnswers, pushQuestionGroupLines, addExplanationLines, getChoiceAnswer, getDirectAnswer, formatOptionText, labelIndexedOptions, pushSharedOptions, formatAreaOfInformation, extractQuestionKeywords, getQuestionTypeLabel, getQuestionRawTypeText, normalizeTypeKey, formatSingleChoiceRadio, formatMultipleChoiceManyOptions, formatSelectionQuestion, formatChoiceOptions, formatSharedOptions, getQuestionOrderRange, collectQuestionAnswerTokens, collectQuestionChoiceTextMap, collectGroupChoiceTextMap, buildExplanationMap } from '../skill/reading.js';
-import { fetchELearningResult } from './helper.js';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-
-function ensureLogDir(pathname) {
-  const directory = String(pathname || '').split('/').slice(0, -1).join('/');
-  if (!directory) {
-    return;
-  }
-
-  if (!existsSync(directory)) {
-    mkdirSync(directory, { recursive: true });
-  }
-}
+import { fetchELearningResult, resetTextLogFile, appendJsonLogLine } from './helper.js';
 
 function extractQuizInfo(source) {
   const value = String(source ?? '').trim();
@@ -39,18 +27,17 @@ function extractQuizInfo(source) {
   return { id: value, skill: '' };
 }
 
-function appendExportLog(record, filePath = 'logs/e-learning-export-log.log') {
-  ensureLogDir(filePath);
-  appendFileSync(filePath, `${JSON.stringify(record)}\n`);
-}
-
 export function createExportDocsCore(deps) {
   const {
     collectBody,
     send,
     contentTypes,
     renderForm,
-    apiUrl
+    apiUrl,
+    enableFileLogs = true,
+    exportLogFile = 'logs/e-learning-export-log.log',
+    renderLogFile = 'logs/e-learning-render-docx.log',
+    questionTypesLogFile = 'logs/e-learning-question-types.log'
   } = deps;
 
   const readingCore = createReadingCore({
@@ -110,6 +97,9 @@ export function createExportDocsCore(deps) {
     paragraph,
     formatResult,
     appendDocxRenderLog,
+    appendQuestionTypeLog,
+    summarizeQuestionTypes,
+    questionTypesLogFile,
     createZip,
     formatYouPassResult: readingCore.formatYouPassResult
   });
@@ -137,8 +127,12 @@ export function createExportDocsCore(deps) {
         return true;
       }
 
+      resetTextLogFile(exportLogFile, enableFileLogs);
+      resetTextLogFile(renderLogFile, enableFileLogs);
+      resetTextLogFile(questionTypesLogFile, enableFileLogs);
+
       const result = await fetchELearningResult({ apiUrl, id: resolvedId, token });
-      appendExportLog(readingCore.buildCleanExportRecord({ id: resolvedId, result, quizTypeOverride: resolvedSkill }));
+      appendJsonLogLine(readingCore.buildCleanExportRecord({ id: resolvedId, result, quizTypeOverride: resolvedSkill }), exportLogFile, enableFileLogs);
       const docx = await docxCore.createDocx({ id: resolvedId, result, quizTypeOverride: resolvedSkill });
       const fileName = `e-learning-${resolvedId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
 

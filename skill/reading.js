@@ -1026,7 +1026,7 @@ export function createReadingCore() {
                 ? `- [__${order}__]`
                 : formatGapQuestionLabel(answer.questionText, order, rawTypeKey);
 
-              lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
+              lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order });
               lines.push({ type: 'questionText', text: questionLabel });
               addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer }, useReadingExplanation);
               if (order) {
@@ -1097,7 +1097,7 @@ export function createReadingCore() {
             }
 
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
               if (fallback) {
                 lines.push({ type: 'questionText', text: fallback });
               }
@@ -1118,7 +1118,7 @@ export function createReadingCore() {
           if (answers.length === 0 && choiceOptions.length > 0) {
             if (!emittedQuestionOrders.has(String(question.order))) {
               pushQuestionGroupLines(lines, question, [{ order: question.order }]);
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
               if (fallback) {
                 lines.push({ type: 'questionText', text: fallback });
               }
@@ -1167,7 +1167,7 @@ export function createReadingCore() {
                 });
                 emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
               }
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}` });
+              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order });
               lines.push({
                 type: 'questionText',
                 text: fallback || `- [__${question.order}__]`
@@ -1195,7 +1195,7 @@ export function createReadingCore() {
 
           answers.forEach((answer, index) => {
             const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
-            lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question' });
+            lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order });
             lines.push({ type: 'questionText', text: formatGapQuestionLabel(answer.questionText, order, rawTypeKey) });
             if (isMultipleChoiceOne) {
               labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
