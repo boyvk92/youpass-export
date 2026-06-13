@@ -113,6 +113,37 @@ function injectSummaryCompletionAnswers(html, answerMap) {
   });
 }
 
+function injectMapDiagramLabelAnswers(html, answerMap) {
+  const source = String(html ?? '');
+  if (!(answerMap instanceof Map) || answerMap.size === 0) {
+    return source;
+  }
+
+  const orderedEntries = [...answerMap.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]));
+  let blankIndex = 0;
+
+  return source.replace(/<span\b([^>]*class="[^"]*gap-placeholder[^"]*"[^>]*)>([\s\S]*?)<\/span>/gi, (match, attrs) => {
+    const explicitOrderMatch = attrs.match(/data-question-id="gf_(\d+)"/i)
+      || attrs.match(/data-question-order="(\d+)"/i)
+      || attrs.match(/data-order="(\d+)"/i);
+    const explicitOrder = String(explicitOrderMatch?.[1] || '').trim();
+    const entry = explicitOrder
+      ? orderedEntries.find(([order]) => order === explicitOrder)
+      : orderedEntries[blankIndex];
+
+    if (!entry) {
+      blankIndex += 1;
+      return match;
+    }
+
+    const [, answer] = entry;
+    blankIndex += 1;
+    const orderLabel = explicitOrder || String(blankIndex);
+    return `<span${attrs}><strong>${orderLabel}</strong> -> <font color="C00000">${answer}</font></span>`;
+  });
+}
+
 function buildSummaryCompletionAnswerListHtml(answerMap) {
   if (!(answerMap instanceof Map) || answerMap.size === 0) {
     return '';
@@ -1626,9 +1657,11 @@ export function createReadingCore() {
                 ? buildMatchingFeaturesContentHtml(matchingSharedQuestions)
                 : (currentRawTypeKey === 'MATCHING_ENDINGS'
                   ? buildMatchingEndingsContentHtml(matchingSharedQuestions)
-                : ((questionGroupContent && (questionGroupRawTypeKey === 'SUMMARY_COMPLETION' || currentRawTypeKey === 'SUMMARY_COMPLETION' || questionGroupRawTypeKey === 'SENTENCE_COMPLETION' || currentRawTypeKey === 'SENTENCE_COMPLETION'))
+                : ((questionGroupContent && (questionGroupRawTypeKey === 'SUMMARY_COMPLETION' || currentRawTypeKey === 'SUMMARY_COMPLETION' || questionGroupRawTypeKey === 'SENTENCE_COMPLETION' || currentRawTypeKey === 'SENTENCE_COMPLETION' || questionGroupRawTypeKey === 'SHORT_ANSWER' || currentRawTypeKey === 'SHORT_ANSWER'))
                 ? injectSummaryCompletionAnswers(questionGroupContent, summaryCompletionAnswerMapByGroupKey.get(questionGroupKey) || new Map())
-                : questionGroupContent)));
+                : ((questionGroupContent && (questionGroupRawTypeKey === 'MAP_DIAGRAM_LABEL' || currentRawTypeKey === 'MAP_DIAGRAM_LABEL'))
+                  ? injectMapDiagramLabelAnswers(questionGroupContent, summaryCompletionAnswerMapByGroupKey.get(questionGroupKey) || new Map())
+                  : questionGroupContent))));
 
             if (currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_ENDINGS' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING' || currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
               const renderedOptionsHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'

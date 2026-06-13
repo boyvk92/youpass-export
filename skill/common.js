@@ -1490,7 +1490,7 @@ export function createDocxCore(deps) {
         }
 
         if (line.type === 'questionDescriptionHtml') {
-          return questionDescriptionHtml(line.html, line.options || {});
+          return questionDescriptionHtml(line.html, { ...(line.options || {}), imageRegistry });
         }
 
         if (line.type === 'questionTitle') {

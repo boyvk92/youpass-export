@@ -48,6 +48,18 @@ Ví dụ:
   - blank trong content phải được thay trực tiếp bằng đáp án tương ứng tại đúng vị trí xuất hiện
   - từng câu lẻ chỉ render một dòng câu hỏi + đáp án + giải thích riêng
   - không lặp lại phần đề chung trước mỗi câu lẻ
+- Với `SHORT_ANSWER`:
+  - `content` của question set phải thay blank `______` bằng đáp án tương ứng ngay tại vị trí xuất hiện
+  - giữ nguyên phần đề chung nếu có ảnh hoặc đoạn dẫn
+  - không render đáp án thành danh sách riêng nếu raw đã đặt blank trong content
+- Khi render phần đề chung có `content` dạng HTML:
+  - nếu HTML có ảnh thì phải giữ lại và đi qua luồng render ảnh của DOCX
+  - không strip `<img>` ra khỏi question set content
+- Với `MAP_DIAGRAM_LABEL`:
+  - `content` của question set có thể chứa hình ảnh của đề chung
+  - blank trong content phải được thay trực tiếp bằng đáp án tương ứng tại đúng vị trí xuất hiện
+  - không tách hình ảnh ra khỏi đề chung
+  - không render danh sách đáp án riêng nếu raw đã có placeholder ngay trong content
 - Với `MULTIPLE_CHOICE_MANY`:
   - mỗi raw question có thể có một block đề chung riêng, không được ghép lẫn lựa chọn của nhiều raw question khác nhau trong cùng một cụm lớn
   - danh sách lựa chọn chỉ render một lần cho đúng block đó
@@ -137,6 +149,15 @@ Chỉ lấy khi câu hỏi có dạng trắc nghiệm hoặc có danh sách lự
   - mỗi câu riêng hiển thị prompt ngắn và đáp án của chính nó
   - không lặp lại description/content ở từng câu
   - không tạo danh sách đáp án riêng ở block chung, chỉ thay vào blank trong content
+- Với `SHORT_ANSWER`:
+  - thay blank trong `question_sets[j].content` bằng đáp án tương ứng
+  - không tách đáp án ra khỏi đề chung nếu raw đã có placeholder
+  - giữ nguyên ảnh và phần văn bản chung đi kèm
+- Với `MAP_DIAGRAM_LABEL`:
+  - giữ nguyên hình ảnh và nội dung chung trong `question_sets[j].content`
+  - thay blank theo thứ tự xuất hiện bằng đáp án tương ứng
+  - không nhân bản lại phần đề chung ở từng câu lẻ
+  - không render thêm một danh sách đáp án tách riêng nếu câu đã có placeholder trong content
 - Với `MULTIPLE_CHOICE_MANY`:
   - phần đề chung giữ prompt + list lựa chọn của từng cụm câu con
   - câu lẻ chỉ render `Question n` và `Giải thích`
