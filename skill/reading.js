@@ -30,6 +30,403 @@ function collectHtmlContent(value, htmlToText) {
   );
 }
 
+function collectHtmlMarkup(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => collectHtmlMarkup(item)).filter(Boolean).join('<br>');
+  }
+
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (typeof value !== 'object') {
+    return String(value).trim();
+  }
+
+  return collectHtmlMarkup(
+    value.html
+      ?? value.content
+      ?? value.text
+      ?? value.value
+      ?? value.children
+      ?? ''
+  );
+}
+
+function combineHtmlMarkup(...values) {
+  return values.map((value) => collectHtmlMarkup(value)).filter(Boolean).join('<br>');
+}
+
+function getSummaryCompletionAnswerText(question) {
+  const answerSource = collectHtmlContent(
+    question?.answer
+      ?? question?.correct_answer
+      ?? question?.correct_answers
+      ?? '',
+    htmlToText
+  );
+  return htmlToText(answerSource || getDirectAnswer(question) || '');
+}
+
+function buildSummaryCompletionAnswerMap(questions = []) {
+  const answerMap = new Map();
+
+  questions.forEach((question) => {
+    const order = Number.parseInt(question?.order, 10);
+    const answer = getSummaryCompletionAnswerText(question);
+    if (Number.isInteger(order) && order > 0 && answer) {
+      answerMap.set(String(order), answer);
+    }
+  });
+
+  return answerMap;
+}
+
+function injectSummaryCompletionAnswers(html, answerMap) {
+  const source = String(html ?? '');
+  if (!(answerMap instanceof Map) || answerMap.size === 0) {
+    return source;
+  }
+
+  const orderedEntries = [...answerMap.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]));
+  let blankIndex = 0;
+
+  return source.replace(/___\[(\d+)\]___|\[__([^\]]+)__\]|_{4,}|[-–—]{4,}/g, (match, orderA, orderB) => {
+    const explicitOrder = String(orderA || orderB || '').trim();
+    const entry = explicitOrder
+      ? orderedEntries.find(([order]) => order === explicitOrder)
+      : orderedEntries[blankIndex];
+
+    if (!entry) {
+      blankIndex += 1;
+      return match;
+    }
+
+    const [order, answer] = entry;
+    blankIndex += 1;
+    return `<strong>${order}</strong>-> <font color="C00000">${answer}</font>`;
+  });
+}
+
+function buildSummaryCompletionAnswerListHtml(answerMap) {
+  if (!(answerMap instanceof Map) || answerMap.size === 0) {
+    return '';
+  }
+
+  const entries = [...answerMap.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]));
+
+  return entries.map(([order, answer]) => `<p><strong>${escapeHtml(order)}</strong> -> <font color="C00000">${escapeHtml(answer)}</font></p>`).join('');
+}
+
+function buildMatchingInfoContentHtml(questions = []) {
+  const rowsByOrder = new Map();
+
+  questions.forEach((question) => {
+    const order = String(question?.order ?? '').trim();
+    if (!order) {
+      return;
+    }
+
+    const row = rowsByOrder.get(order) || { order, text: '', answer: '' };
+    const text = htmlToText(question?.text || question?.content || question?.title || '');
+    const answer = htmlToText(getDirectAnswer(question) || question?.answer || question?.correct_answer || '');
+
+    if (!row.text && text) {
+      row.text = text;
+    }
+
+    if (!row.answer && answer) {
+      row.answer = answer;
+    }
+
+    rowsByOrder.set(order, row);
+  });
+
+  return [...rowsByOrder.values()]
+    .sort((a, b) => Number(a.order) - Number(b.order))
+    .map((row) => {
+      const parts = [];
+      if (row.order) {
+        parts.push(`<strong>${row.order}</strong>.`);
+      }
+      if (row.text) {
+        parts.push(row.text);
+      }
+      if (row.answer) {
+        parts.push(`<font color="C00000">${row.answer}</font>`);
+      }
+      return `<p>${parts.join(' ')}</p>`;
+    })
+    .join('');
+}
+
+function stripChoiceLabelPrefix(value) {
+  return String(value ?? '')
+    .replace(/^[A-Z0-9IVXLCDM]+\s*[.)-:]?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildMatchingFeatureChoiceTextMap(questions = []) {
+  const map = new Map();
+
+  questions.forEach((question) => {
+    const sharedOptions = formatSharedOptions(question);
+    const selectionOptions = formatSelectionOptions(question);
+    const options = sharedOptions.length > 0 ? sharedOptions : selectionOptions;
+
+    labelIndexedOptions(options).forEach((option) => {
+      const key = normalizeChoiceLabel(option.option);
+      const value = stripChoiceLabelPrefix(htmlToText(option.text || option.displayText || ''));
+
+      if (key && value && !map.has(key)) {
+        map.set(key, value);
+      }
+    });
+  });
+
+  return map;
+}
+
+function resolveMatchingFeatureAnswerText(question, choiceTextMap) {
+  const candidates = [
+    question?.answer?.text,
+    question?.answer?.content,
+    question?.answer?.value,
+    question?.correct_answer?.text,
+    question?.correct_answer?.content,
+    question?.correct_answer?.value,
+    getDirectAnswer(question),
+    question?.answer,
+    question?.correct_answer
+  ]
+    .map((value) => htmlToText(value))
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeChoiceLabel(candidate);
+    if (normalizedCandidate && choiceTextMap instanceof Map && choiceTextMap.has(normalizedCandidate)) {
+      return choiceTextMap.get(normalizedCandidate);
+    }
+
+    const strippedCandidate = stripChoiceLabelPrefix(candidate);
+    const normalizedStrippedCandidate = normalizeChoiceLabel(strippedCandidate);
+    if (normalizedStrippedCandidate && choiceTextMap instanceof Map && choiceTextMap.has(normalizedStrippedCandidate)) {
+      return choiceTextMap.get(normalizedStrippedCandidate);
+    }
+  }
+
+  return stripChoiceLabelPrefix(candidates[0] || '');
+}
+
+function buildMatchingFeatureOptionsHtml(questions = []) {
+  const options = [];
+  const seen = new Set();
+
+  questions.forEach((question) => {
+    const sharedOptions = formatSharedOptions(question);
+    const selectionOptions = formatSelectionOptions(question);
+    const sourceOptions = sharedOptions.length > 0 ? sharedOptions : selectionOptions;
+
+    sourceOptions.forEach((option) => {
+      const label = normalizeChoiceLabel(option.option);
+      const text = String(formatOptionText(option) || '').trim();
+      const signature = text || `${label}|${String(option.text || '').trim()}`;
+
+      if (signature && !seen.has(signature)) {
+        seen.add(signature);
+        options.push(text);
+      }
+    });
+  });
+
+  return options.length > 0
+    ? options.map((optionText) => `<p>${optionText}</p>`).join('')
+    : '';
+}
+
+function buildMultipleChoiceManyOptionsHtml(questions = []) {
+  const options = [];
+  const seen = new Set();
+
+  questions.forEach((question) => {
+    const sourceOptions = formatMultipleChoiceManyOptions(question);
+
+    sourceOptions.forEach((option) => {
+      const label = normalizeChoiceLabel(option.option);
+      const text = String(formatOptionText(option) || '').trim();
+      const signature = text || `${label}|${String(option.text || '').trim()}`;
+
+      if (signature && !seen.has(signature)) {
+        seen.add(signature);
+        options.push(text);
+      }
+    });
+  });
+
+  return options.length > 0
+    ? options.map((optionText) => `<p>${optionText}</p>`).join('')
+    : '';
+}
+
+function buildMultipleChoiceManyPromptHtml(questions = []) {
+  const firstQuestion = questions.find((question) => String(question?.text || question?.content || question?.title || '').trim()) || null;
+  if (!firstQuestion) {
+    return '';
+  }
+
+  return String(firstQuestion.text || firstQuestion.content || firstQuestion.title || '').trim();
+}
+
+function buildMultipleChoiceManyOrderRange(question) {
+  const order = Number.parseInt(question?.order, 10);
+  const correctCount = formatMultipleChoiceManyOptions(question).filter((option) => option.correct).length;
+
+  if (!Number.isInteger(order) || order <= 0) {
+    return '';
+  }
+
+  if (correctCount <= 1) {
+    return String(order);
+  }
+
+  return `${order}-${order + correctCount - 1}`;
+}
+
+function extractMultipleChoiceManyExplanationChunks(explanationHtml = '') {
+  const source = String(explanationHtml || '');
+  const pattern = /Giải thích\s+đáp\s+án\s+([A-Z0-9IVXLCDM]+)\s*:/gi;
+  const matches = [...source.matchAll(pattern)];
+  const chunks = new Map();
+
+  if (matches.length === 0) {
+    return chunks;
+  }
+
+  matches.forEach((match, index) => {
+    const label = normalizeChoiceLabel(match[1]);
+    if (!label || chunks.has(label)) {
+      return;
+    }
+
+    const start = match.index ?? 0;
+    const end = index + 1 < matches.length ? (matches[index + 1].index ?? source.length) : source.length;
+    const chunk = source.slice(start, end).trim();
+    if (chunk) {
+      chunks.set(label, chunk);
+    }
+  });
+
+  return chunks;
+}
+
+function trimMultipleChoiceManyExplanationToFirstBlock(explanationHtml = '') {
+  const source = String(explanationHtml || '').trim();
+  if (!source) {
+    return '';
+  }
+
+  const nextBlockIndex = source.search(/\n\s*Giải thích\s+đáp\s+án\s+/i);
+  if (nextBlockIndex > 0) {
+    return source.slice(0, nextBlockIndex).trim();
+  }
+
+  return source;
+}
+
+function buildMatchingFeaturesContentHtml(questions = []) {
+  const rowsByOrder = new Map();
+  const choiceTextMap = buildMatchingFeatureChoiceTextMap(questions);
+
+  questions.forEach((question) => {
+    const order = String(question?.order ?? '').trim();
+    if (!order) {
+      return;
+    }
+
+    const row = rowsByOrder.get(order) || { order, text: '', answer: '' };
+    const text = htmlToText(question?.text || question?.content || question?.title || '');
+    const answer = resolveMatchingFeatureAnswerText(question, choiceTextMap);
+
+    if (!row.text && text) {
+      row.text = text;
+    }
+
+    if (!row.answer && answer) {
+      row.answer = answer;
+    }
+
+    rowsByOrder.set(order, row);
+  });
+
+  return [...rowsByOrder.values()]
+    .sort((a, b) => Number(a.order) - Number(b.order))
+    .map((row) => {
+      const parts = [];
+      if (row.order) {
+        parts.push(`<strong>${row.order}</strong>.`);
+      }
+      if (row.answer) {
+        parts.push(`<font color="C00000">${row.answer}</font>`);
+      }
+      if (row.text) {
+        parts.push(row.text);
+      }
+      return `<p>${parts.join(' ')}</p>`;
+    })
+    .join('');
+}
+
+function buildMatchingEndingsContentHtml(questions = []) {
+  const rowsByOrder = new Map();
+  const choiceTextMap = buildMatchingFeatureChoiceTextMap(questions);
+
+  questions.forEach((question) => {
+    const order = String(question?.order ?? '').trim();
+    if (!order) {
+      return;
+    }
+
+    const row = rowsByOrder.get(order) || { order, text: '', answer: '' };
+    const text = htmlToText(question?.text || question?.content || question?.title || '');
+    const answer = resolveMatchingFeatureAnswerText(question, choiceTextMap);
+
+    if (!row.text && text) {
+      row.text = text;
+    }
+
+    if (!row.answer && answer) {
+      row.answer = answer;
+    }
+
+    rowsByOrder.set(order, row);
+  });
+
+  return [...rowsByOrder.values()]
+    .sort((a, b) => Number(a.order) - Number(b.order))
+    .map((row) => {
+      const parts = [];
+      if (row.order) {
+        parts.push(`<strong>${row.order}</strong>.`);
+      }
+      if (row.text) {
+        parts.push(row.text);
+      }
+      if (row.answer) {
+        parts.push(`<font color="C00000">${row.answer}</font>`);
+      }
+      return `<p>${parts.join(' ')}</p>`;
+    })
+    .join('');
+}
+
 const IELTS_TYPES = {
   1: 'Multiple Choice',
   2: 'True/False/Not Given',
@@ -96,11 +493,14 @@ export function isReadingRawType(rawType) {
 
 export function splitPassageContent(part, data) {
   const bodyLines = extractVocabPassageLines(part.vocabs);
-  const fallbackTitle = part.title || cleanQuizTitle(data?.title);
-  const title = fallbackTitle;
+  const partTitle = String(part.title ?? '').trim();
+  const fallbackTitle = cleanQuizTitle(data?.title);
+  const isQuestionGroupTitle = /^Questions?\s+\d+(?:\s*[-–—]\s*\d+)?/i.test(partTitle);
+  const title = partTitle && !isQuestionGroupTitle ? partTitle : fallbackTitle;
 
   return {
     title,
+    questionGroupTitle: isQuestionGroupTitle ? `${partTitle.match(/^Questions?\s+\d+(?:\s*[-–—]\s*\d+)?/i)?.[0] || partTitle.replaceAll(/:\s*$/g, '')}:` : '',
     bodyLines
   };
 }
@@ -294,6 +694,74 @@ export function getQuestionTypeLabel(question) {
   return '';
 }
 
+function isInstructionQuestionGroupType(rawTypeKey) {
+  const normalizedRawTypeKey = normalizeTypeKey(rawTypeKey);
+  return normalizedRawTypeKey === 'TRUE_FALSE'
+    || normalizedRawTypeKey === 'TRUE_FALSE_NOT_GIVEN'
+    || normalizedRawTypeKey === 'YES_NO'
+    || normalizedRawTypeKey === 'YES_NO_NOT_GIVEN';
+}
+
+function isStatementQuestionType(rawTypeKey) {
+  return isInstructionQuestionGroupType(rawTypeKey);
+}
+
+function getStatementChoiceText(rawTypeKey, answerText = '') {
+  const normalizedRawTypeKey = normalizeTypeKey(rawTypeKey);
+  const normalizedAnswerText = String(answerText ?? '').trim().replace(/\s+/g, ' ');
+
+  if (normalizedRawTypeKey === 'TRUE_FALSE' || normalizedRawTypeKey === 'TRUE_FALSE_NOT_GIVEN') {
+    return normalizedAnswerText === 'TRUE' || normalizedAnswerText === 'FALSE' || normalizedAnswerText === 'NOT GIVEN'
+      ? normalizedAnswerText
+      : '';
+  }
+
+  if (normalizedRawTypeKey === 'YES_NO' || normalizedRawTypeKey === 'YES_NO_NOT_GIVEN') {
+    return normalizedAnswerText === 'YES' || normalizedAnswerText === 'NO' || normalizedAnswerText === 'NOT GIVEN'
+      ? normalizedAnswerText
+      : '';
+  }
+
+  return normalizedAnswerText;
+}
+
+function buildStatementChoiceOptions(rawTypeKey, answerText = '') {
+  const normalizedRawTypeKey = normalizeTypeKey(rawTypeKey);
+  const normalizedAnswerText = getStatementChoiceText(normalizedRawTypeKey, answerText);
+
+  if (normalizedRawTypeKey === 'TRUE_FALSE' || normalizedRawTypeKey === 'TRUE_FALSE_NOT_GIVEN') {
+    return [
+      { option: 'A', text: 'TRUE', correct: normalizedAnswerText === 'TRUE' },
+      { option: 'B', text: 'FALSE', correct: normalizedAnswerText === 'FALSE' },
+      { option: 'C', text: 'NOT GIVEN', correct: normalizedAnswerText === 'NOT GIVEN' }
+    ];
+  }
+
+  if (normalizedRawTypeKey === 'YES_NO' || normalizedRawTypeKey === 'YES_NO_NOT_GIVEN') {
+    return [
+      { option: 'A', text: 'YES', correct: normalizedAnswerText === 'YES' },
+      { option: 'B', text: 'NO', correct: normalizedAnswerText === 'NO' },
+      { option: 'C', text: 'NOT GIVEN', correct: normalizedAnswerText === 'NOT GIVEN' }
+    ];
+  }
+
+  return [];
+}
+
+function formatQuestionPromptLine(order, text, rawTypeKey) {
+  const questionText = String(text ?? '').trim();
+  const normalizedRawTypeKey = normalizeTypeKey(rawTypeKey);
+
+  if ((normalizedRawTypeKey === 'TRUE_FALSE'
+    || normalizedRawTypeKey === 'TRUE_FALSE_NOT_GIVEN'
+    || normalizedRawTypeKey === 'YES_NO'
+    || normalizedRawTypeKey === 'YES_NO_NOT_GIVEN') && questionText) {
+    return `Question ${order}. ${questionText}`;
+  }
+
+  return `Question ${order}`;
+}
+
 export function isFillInTheBlankQuestion(question) {
   return normalizeTypeKey(question.type) === 'FILL_IN_THE_BLANK'
     || (normalizeTypeKey(question.question_type) === 'FILL_BLANK' && Boolean(question.gap_fill_in_blank))
@@ -329,11 +797,19 @@ export function formatOptionText(option) {
 }
 
 export function formatSelectionQuestion(question) {
-  return (question.selection || []).map((item) => ({
-    order: question.order,
-    questionText: htmlToText(item.text),
-    answer: htmlToText(item.answer)
-  }));
+  const baseOrder = Number.parseInt(question?.order, 10);
+  return (question.selection || []).map((item, index) => {
+    const explicitOrder = Number.parseInt(item?.order, 10);
+    const fallbackOrder = Number.isInteger(baseOrder) ? String(baseOrder + index) : String(question.order || '');
+
+    return {
+      order: Number.isInteger(explicitOrder) && explicitOrder > 0
+        ? String(explicitOrder)
+        : fallbackOrder,
+      questionText: htmlToText(item.text),
+      answer: htmlToText(item.answer)
+    };
+  });
 }
 
 export function formatChoiceOptions(question) {
@@ -351,6 +827,9 @@ export function formatMultipleChoiceManyOptions(question) {
     question.mutilple_choice,
     question.multipleChoice,
     question.multiple_choices,
+    question.options,
+    question.choices,
+    question.choice_options,
     question.answer?.multiple_choice,
     question.answers?.multiple_choice,
     question.answer?.multipleChoice,
@@ -534,14 +1013,13 @@ export function formatQuestionGroupLines(question, answers) {
   const descriptionHtml = String(question.description ?? '').trim();
   const descriptionLines = splitTextLines(htmlToText(descriptionHtml));
   const hasHtml = /<\/?[a-z][\s\S]*>/i.test(descriptionHtml);
-
   if (descriptionLines.length > 0) {
     if (typeLabel && /^Questions?\s+\d/i.test(descriptionLines[0])) {
       const firstLine = descriptionLines[0].replaceAll(/:\s*$/g, '');
       return [
         {
           type: 'questionGroup',
-          text: `${firstLine}: ${typeLabel}`,
+          text: firstLine,
           rawTypeKey,
           questionOrder
         },
@@ -553,7 +1031,7 @@ export function formatQuestionGroupLines(question, answers) {
       return [
         {
           type: 'questionGroup',
-          text: `Type: ${typeLabel}`,
+          text: `Questions ${questionOrder}`,
           rawTypeKey,
           questionOrder
         },
@@ -576,7 +1054,7 @@ export function formatQuestionGroupLines(question, answers) {
   if (!orderRange.includes('-')) {
     return [{
       type: 'questionGroup',
-      text: `Type: ${typeLabel}`,
+      text: `Questions ${orderRange}`,
       rawTypeKey,
       questionOrder: orderRange
     }];
@@ -584,7 +1062,7 @@ export function formatQuestionGroupLines(question, answers) {
 
   return [{
     type: 'questionGroup',
-    text: `Questions ${orderRange}: ${typeLabel}`,
+    text: `Questions ${orderRange}`,
     rawTypeKey,
     questionOrder: orderRange
   }];
@@ -745,6 +1223,10 @@ export function addExplanationLines(lines, question, order, explanationsByOrder,
   }
 
   const rawTypeKey = getQuestionRawTypeKey(question);
+  const isStatementQuestionType = rawTypeKey === 'TRUE_FALSE'
+    || rawTypeKey === 'TRUE_FALSE_NOT_GIVEN'
+    || rawTypeKey === 'YES_NO'
+    || rawTypeKey === 'YES_NO_NOT_GIVEN';
   const answerTokens = collectQuestionAnswerTokens(question, details);
   const choiceTextMap = new Map([
     ...collectGroupChoiceTextMap(question).entries(),
@@ -763,7 +1245,10 @@ export function addExplanationLines(lines, question, order, explanationsByOrder,
     return;
   }
 
-  if (answer && rawTypeKey !== 'MULTIPLE_CHOICE_ONE' && rawTypeKey !== 'MULTIPLE_CHOICE_MANY') {
+  const isMatchingSharedQuestionType = rawTypeKey === 'MATCHING_FEATURES'
+    || rawTypeKey === 'MATCHING_ENDINGS';
+
+  if (answer && rawTypeKey !== 'MULTIPLE_CHOICE_ONE' && rawTypeKey !== 'MULTIPLE_CHOICE_MANY' && !isStatementQuestionType && !isMatchingSharedQuestionType) {
     lines.push({
       type: 'questionAnswerBlock',
       answer
@@ -921,7 +1406,7 @@ export function getPartQuestions(part) {
       ...question,
       question_type: question.question_type || questionSet.question_type,
       description: index === 0
-        ? [questionSet.title, htmlToText(questionSet.description)].filter(Boolean).join('<br>')
+        ? String(questionSet.description ?? '').trim()
         : question.description,
       shared_question_content: index === 0 ? sharedQuestionContent : '',
       shared_question_group_key: sharedQuestionGroupKey,
@@ -1037,24 +1522,172 @@ export function createReadingCore() {
         const emittedSharedOptionGroups = new Set();
         const emittedSelectionOptionGroups = new Set();
         const emittedSharedQuestionGroups = new Set();
+        const emittedSharedQuestionDescriptions = new Set();
+        const emittedSharedQuestionContents = new Set();
         const emittedMatchingFeatureGroups = new Set();
         const explanationsByOrder = buildExplanationMap(partQuestions);
+        const questionGroupMetaByKey = new Map();
+        const summaryCompletionAnswerMapByGroupKey = new Map();
+
+        const registerSummaryAnswer = (groupKey, question) => {
+          const normalizedGroupKey = String(groupKey || '').trim();
+          if (!normalizedGroupKey) {
+            return;
+          }
+
+          const order = Number.parseInt(question?.order, 10);
+          const answer = getSummaryCompletionAnswerText(question);
+          if (!Number.isInteger(order) || order <= 0 || !answer) {
+            return;
+          }
+
+          if (!summaryCompletionAnswerMapByGroupKey.has(normalizedGroupKey)) {
+            summaryCompletionAnswerMapByGroupKey.set(normalizedGroupKey, new Map());
+          }
+
+          summaryCompletionAnswerMapByGroupKey.get(normalizedGroupKey).set(String(order), answer);
+        };
+
+        if (Array.isArray(part.question_sets)) {
+          part.question_sets.forEach((questionSet) => {
+            const groupKey = String(questionSet?.id || questionSet?.title || questionSet?.question_set_id || '').trim();
+            const summaryQuestions = Array.isArray(questionSet?.questions) ? questionSet.questions : [];
+            summaryQuestions.forEach((question) => registerSummaryAnswer(groupKey, question));
+          });
+        }
+
+        if (Array.isArray(part.questions)) {
+          part.questions.forEach((question) => {
+            const groupKey = String(question?.shared_question_group_key || question?.question_set_id || question?.group?.id || question?.group?.type || '').trim();
+            registerSummaryAnswer(groupKey, question);
+          });
+        }
+
+        if (Array.isArray(part.question_sets)) {
+          part.question_sets.forEach((questionSet) => {
+            const key = String(questionSet?.id || questionSet?.title || questionSet?.question_set_id || '').trim();
+            if (!key) {
+              return;
+            }
+
+            const rawTypeKey = normalizeTypeKey(
+              questionSet?.question_type
+              || questionSet?.type
+              || questionSet?.kind
+              || questionSet?.question_type_id
+              || ''
+            );
+            questionGroupMetaByKey.set(key, {
+              title: String(questionSet?.title || '').trim(),
+              description: collectHtmlMarkup(questionSet?.description),
+              content: collectHtmlMarkup(questionSet?.content),
+              rawTypeKey
+            });
+          });
+        }
 
         for (const question of partQuestions) {
+          const questionGroupKey = String(question.shared_question_group_key || '').trim();
+          const questionGroupMeta = questionGroupMetaByKey.get(questionGroupKey) || {};
+          const questionGroupTitle = String(questionGroupMeta.title || '').trim();
+          const questionGroupDescription = String(questionGroupMeta.description || '').trim();
+          const questionGroupContent = String(questionGroupMeta.content || '').trim();
+          const questionGroupRawTypeKey = String(questionGroupMeta.rawTypeKey || '').trim();
+
+          if (questionGroupKey && questionGroupTitle && !emittedSharedQuestionGroups.has(questionGroupKey)) {
+            lines.push({
+              type: 'questionGroup',
+              text: `${questionGroupTitle.replaceAll(/:\s*$/g, '')}:`
+            });
+            emittedSharedQuestionGroups.add(questionGroupKey);
+          }
+
+          if (questionGroupKey && questionGroupDescription && !emittedSharedQuestionDescriptions.has(questionGroupKey)) {
+            lines.push({
+              type: 'questionDescriptionHtml',
+              html: questionGroupDescription,
+              options: { size: '26', color: '2A5A78' }
+            });
+            emittedSharedQuestionDescriptions.add(questionGroupKey);
+          }
+
+          const currentRawTypeKey = getQuestionRawTypeKey(question);
+          const sharedQuestionContentKey = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+            ? `${questionGroupKey}:${String(question.order || '').trim()}`
+            : questionGroupKey;
+
+          if (questionGroupKey && !emittedSharedQuestionContents.has(sharedQuestionContentKey)) {
+            const matchingSharedQuestions = partQuestions.filter((item) => String(item.shared_question_group_key || item.question_set_id || '').trim() === questionGroupKey && getQuestionRawTypeKey(item) === currentRawTypeKey);
+            const renderedContentHtml = currentRawTypeKey === 'MATCHING_INFO'
+              ? buildMatchingInfoContentHtml(
+                partQuestions.filter((item) => String(item.shared_question_group_key || item.question_set_id || '').trim() === questionGroupKey && getQuestionRawTypeKey(item) === 'MATCHING_INFO')
+              )
+              : (currentRawTypeKey === 'MATCHING_FEATURES'
+                ? buildMatchingFeaturesContentHtml(matchingSharedQuestions)
+                : (currentRawTypeKey === 'MATCHING_ENDINGS'
+                  ? buildMatchingEndingsContentHtml(matchingSharedQuestions)
+                : ((questionGroupContent && (questionGroupRawTypeKey === 'SUMMARY_COMPLETION' || currentRawTypeKey === 'SUMMARY_COMPLETION' || questionGroupRawTypeKey === 'SENTENCE_COMPLETION' || currentRawTypeKey === 'SENTENCE_COMPLETION'))
+                ? injectSummaryCompletionAnswers(questionGroupContent, summaryCompletionAnswerMapByGroupKey.get(questionGroupKey) || new Map())
+                : questionGroupContent)));
+
+            if (currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_ENDINGS' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING' || currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+              const renderedOptionsHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+                ? buildMultipleChoiceManyOptionsHtml([question])
+                : buildMatchingFeatureOptionsHtml(matchingSharedQuestions);
+              const renderedPromptHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+                ? `<strong>${buildMultipleChoiceManyOrderRange(question)}</strong> ${buildMultipleChoiceManyPromptHtml([question])}`.trim()
+                : '';
+              if (renderedPromptHtml) {
+                lines.push({
+                  type: 'questionDescriptionHtml',
+                  html: renderedPromptHtml,
+                  options: { size: '26' }
+                });
+              }
+              if (renderedOptionsHtml) {
+                lines.push({
+                  type: 'questionDescriptionHtml',
+                  html: renderedOptionsHtml,
+                  options: { size: '26', color: '2A5A78' }
+                });
+              }
+            }
+
+            if (renderedContentHtml) {
+              lines.push({
+                type: 'questionDescriptionHtml',
+                html: renderedContentHtml,
+                  options: (currentRawTypeKey === 'MATCHING_INFO' || currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING')
+                  ? { size: '24', indentLeft: '720' }
+                  : undefined
+                });
+            }
+
+            if (renderedContentHtml || currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_ENDINGS' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING' || currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+              emittedSharedQuestionContents.add(sharedQuestionContentKey);
+            }
+          }
+
+          if (getQuestionRawTypeKey(question) === 'MATCHING_INFO') {
+            if (!emittedQuestionOrders.has(String(question.order))) {
+              lines.push({
+                type: 'questionTitle',
+                text: `Question ${question.order}.`,
+                order: question.order,
+                rawTypeKey: 'MATCHING_INFO'
+              });
+              addExplanationLines(lines, question, question.order, explanationsByOrder, {
+                answer: '',
+                questionText: ''
+              }, useReadingExplanation);
+              emittedQuestionOrders.add(String(question.order));
+            }
+            continue;
+          }
+
           if (isFillInTheBlankQuestion(question)) {
             const rawTypeKey = getQuestionRawTypeKey(question);
             const answers = extractMarkedAnswers(question.gap_fill_in_blank);
-
-            pushQuestionGroupLines(lines, question, answers);
-
-            const sharedQuestionGroupKey = String(question.shared_question_group_key || '').trim();
-            if (sharedQuestionGroupKey && question.shared_question_content && !emittedSharedQuestionGroups.has(sharedQuestionGroupKey)) {
-              lines.push({
-                type: 'questionDescriptionHtml',
-                html: question.shared_question_content
-              });
-              emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
-            }
 
             lines.push({
               type: 'questionGapHtml',
@@ -1091,7 +1724,8 @@ export function createReadingCore() {
           const rawTypeKey = getQuestionRawTypeKey(question);
           const isMultipleChoiceOne = rawTypeKey === 'MULTIPLE_CHOICE_ONE';
           const isMatchingFeatures = rawTypeKey === 'MATCHING_FEATURES';
-          const isSharedOptionGroup = isMatchingFeatures || rawTypeKey === 'MATCHING_ENDINGS';
+          const isMatchingHeadings = rawTypeKey === 'MATCHING_HEADINGS' || rawTypeKey === 'MATCHING_HEADING';
+          const isSharedOptionGroup = isMatchingFeatures || isMatchingHeadings || rawTypeKey === 'MATCHING_ENDINGS';
           const singleChoiceOptions = normalizeTypeKey(question.question_type) === 'MULTIPLE_CHOICE_ONE'
             || normalizeTypeKey(question.type) === 'MULTIPLE_CHOICE_ONE'
             ? formatSingleChoiceRadio(question)
@@ -1100,7 +1734,7 @@ export function createReadingCore() {
             ? formatMultipleChoiceManyOptions(question)
             : [];
           const sharedOptions = formatSharedOptions(question);
-          const selectionOptions = isMatchingFeatures
+          const selectionOptions = (isMatchingFeatures || isMatchingHeadings)
             ? formatSelectionOptions(question)
             : [];
           const matchingFeatureOptions = isSharedOptionGroup
@@ -1117,6 +1751,11 @@ export function createReadingCore() {
               : (isSharedOptionGroup && matchingFeatureOptions.length > 0
                 ? matchingFeatureOptions
                 : (selectionOptions.length > 0 ? selectionOptions : formatChoiceOptions(question))));
+          const choiceAnswer = getChoiceAnswer(question, choiceOptions);
+          const directAnswer = getDirectAnswer(question);
+          const statementChoiceOptions = isStatementQuestionType(rawTypeKey)
+            ? buildStatementChoiceOptions(rawTypeKey, directAnswer || fallback)
+            : (choiceOptions.length > 0 ? choiceOptions : []);
           const renderedChoiceOptions = isMultipleChoiceOne
             ? (singleChoiceOptions.length > 0 ? singleChoiceOptions : choiceOptions)
               : (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && multipleChoiceManyOptions.length > 0
@@ -1124,27 +1763,43 @@ export function createReadingCore() {
                 : (isSharedOptionGroup && matchingFeatureOptions.length > 0
                   ? matchingFeatureOptions
                   : (sharedOptions.length > 0 ? sharedOptions : choiceOptions)));
-          const choiceAnswer = getChoiceAnswer(question, choiceOptions);
-          const directAnswer = getDirectAnswer(question);
 
           if (isSharedOptionGroup) {
             if (!emittedMatchingFeatureGroups.has(matchingFeatureGroupKey)) {
-              pushQuestionGroupLines(lines, question, [{ order: question.order }]);
-              if (renderSharedOptions.length > 0) {
-                renderSharedOptions.forEach((option) => {
-                  lines.push({
-                    type: 'choice',
-                    text: formatOptionText(option),
-                    correct: false
-                  });
-                });
-              }
               emittedMatchingFeatureGroups.add(matchingFeatureGroupKey);
             }
 
+            if (rawTypeKey === 'MATCHING_FEATURES' || rawTypeKey === 'MATCHING_ENDINGS') {
+              if (!emittedQuestionOrders.has(String(question.order))) {
+                lines.push({
+                  type: 'questionTitle',
+                  text: `Question ${question.order}.`,
+                  order: question.order,
+                  rawTypeKey
+                });
+                addExplanationLines(lines, question, question.order, explanationsByOrder, {
+                  answer: (rawTypeKey === 'MATCHING_HEADINGS' || rawTypeKey === 'MATCHING_HEADING') ? '' : choiceAnswer,
+                  questionText: fallback,
+                  choices: renderedChoiceOptions.map((option) => ({
+                    ...option,
+                    displayText: formatOptionText(option),
+                    correct: option.correct || option.option === choiceAnswer
+                  }))
+                }, useReadingExplanation);
+                emittedQuestionOrders.add(String(question.order));
+              }
+              continue;
+            }
+
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
-              if (fallback) {
+              lines.push({
+                type: 'questionTitle',
+                text: `Question ${question.order}.`,
+                questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || '') : '',
+                order: question.order,
+                rawTypeKey
+              });
+              if (fallback && !isStatementQuestionType(rawTypeKey) && !isMatchingHeadings) {
                 lines.push({ type: 'questionText', text: fallback });
               }
               addExplanationLines(lines, question, question.order, explanationsByOrder, {
@@ -1153,7 +1808,9 @@ export function createReadingCore() {
                 choices: renderedChoiceOptions.map((option) => ({
                   ...option,
                   displayText: formatOptionText(option),
-                  correct: option.correct || option.option === choiceAnswer
+                  correct: isStatementQuestionType(rawTypeKey)
+                    ? option.correct
+                    : (option.correct || option.option === choiceAnswer)
                 }))
               }, useReadingExplanation);
               emittedQuestionOrders.add(String(question.order));
@@ -1161,11 +1818,106 @@ export function createReadingCore() {
             continue;
           }
 
-          if (answers.length === 0 && choiceOptions.length > 0) {
+          if (rawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+            const baseOrder = Number.parseInt(question.order, 10);
+            const correctOptions = renderedChoiceOptions.filter((option) => option.correct);
+            const multiAnswers = correctOptions.length > 0
+              ? correctOptions.map((option, index) => ({
+                option,
+                order: Number.isInteger(baseOrder) ? baseOrder + index : question.order
+              }))
+              : [{
+                option: {
+                  option: choiceAnswer || '',
+                  text: '',
+                  correct: true
+                },
+                order: question.order || ''
+              }];
+            const explanationChunks = extractMultipleChoiceManyExplanationChunks(question.explain);
+
+            multiAnswers.forEach(({ option, order }, index) => {
+              const resolvedOrder = order || (multiAnswers.length === 1 ? question.order : Number.parseInt(question.order, 10) + index);
+              const orderKey = String(resolvedOrder || '');
+              if (orderKey && emittedQuestionOrders.has(orderKey)) {
+                return;
+              }
+
+              const optionLabel = normalizeChoiceLabel(option.option);
+              const rowExplain = trimMultipleChoiceManyExplanationToFirstBlock(explanationChunks.get(optionLabel) || question.explain || '');
+              const rowQuestion = {
+                ...question,
+                explain: rowExplain,
+                correct_answer: option.option,
+                correct_answers: [option.option]
+              };
+
+              lines.push({
+                type: 'questionTitle',
+                text: resolvedOrder ? `Question ${resolvedOrder}` : 'Question',
+                questionText: '',
+                order: resolvedOrder,
+                rawTypeKey
+              });
+              const keywords = extractQuestionKeywords(rowQuestion);
+              const answerText = formatOptionText(option);
+              const normalizedExplanation = normalizeExplanationHtml(
+                rowExplain,
+                [option.option],
+                new Map([[normalizeChoiceLabel(option.option), answerText]]),
+                rawTypeKey
+              );
+
+              if (keywords.length > 0) {
+                lines.push({
+                  type: 'questionKeywordsBlock',
+                  keywords
+                });
+              }
+
+              if (String(normalizedExplanation ?? '').trim()) {
+                lines.push({
+                  type: 'questionExplanationBlock',
+                  explanationHtml: normalizedExplanation,
+                  answerTokens: [option.option],
+                  answerTextMap: new Map([[normalizeChoiceLabel(option.option), answerText]]),
+                  rawTypeKey
+                });
+              }
+              if (orderKey) {
+                emittedQuestionOrders.add(orderKey);
+              }
+            });
+            continue;
+          }
+
+          if (rawTypeKey === 'SUMMARY_COMPLETION' && !emittedQuestionOrders.has(String(question.order))) {
+            lines.push({
+              type: 'questionTitle',
+              text: `Question ${question.order}`,
+              questionText: '',
+              order: question.order,
+              rawTypeKey
+            });
+            addExplanationLines(lines, question, question.order, explanationsByOrder, {
+              answer: '',
+              questionText: fallback
+            }, useReadingExplanation);
+            emittedQuestionOrders.add(String(question.order));
+            continue;
+          }
+
+          if (answers.length === 0 && choiceOptions.length > 0 && !isStatementQuestionType(rawTypeKey) && !isMatchingHeadings) {
             if (!emittedQuestionOrders.has(String(question.order))) {
-              pushQuestionGroupLines(lines, question, [{ order: question.order }]);
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
-              if (fallback) {
+              const promptHtml = String(question.text || question.content || question.title || '').trim();
+              lines.push({
+                type: 'questionTitle',
+                text: `Question ${question.order}`,
+                questionHtml: isMultipleChoiceOne ? promptHtml : '',
+                order: question.order,
+                rawTypeKey
+              });
+              if (!isMultipleChoiceOne && fallback && !isInstructionQuestionGroupType(rawTypeKey)) {
                 lines.push({ type: 'questionText', text: fallback });
               }
               if (isMultipleChoiceOne) {
@@ -1176,7 +1928,7 @@ export function createReadingCore() {
                     correct: option.correct || option.option === choiceAnswer
                   });
                 });
-              } else {
+              } else if (!isSharedOptionGroup) {
                 pushSharedOptions(lines, renderSharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
                 if (renderSharedOptions.length === 0) {
                   choiceOptions.forEach((option) => {
@@ -1202,24 +1954,66 @@ export function createReadingCore() {
             continue;
           }
 
-          if (answers.length === 0) {
-            if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              pushQuestionGroupLines(lines, question, [{ order: question.order }]);
-              const sharedQuestionGroupKey = String(question.shared_question_group_key || '').trim();
-              if (sharedQuestionGroupKey && question.shared_question_content && !emittedSharedQuestionGroups.has(sharedQuestionGroupKey)) {
-                lines.push({
-                  type: 'questionDescriptionHtml',
-                  html: question.shared_question_content
-                });
-                emittedSharedQuestionGroups.add(sharedQuestionGroupKey);
-              }
-              lines.push({ type: 'questionTitle', text: `Question ${question.order}`, order: question.order, rawTypeKey });
+          if (answers.length === 0 && (statementChoiceOptions.length > 0 || choiceOptions.length > 0) && isStatementQuestionType(rawTypeKey)) {
+            if (!emittedQuestionOrders.has(String(question.order))) {
+              const promptHtml = String(question.text || question.content || question.title || fallback || '').trim();
               lines.push({
-                type: 'questionText',
-                text: fallback || `- [__${question.order}__]`
+                type: 'questionTitle',
+                text: `Question ${question.order}`,
+                questionHtml: promptHtml,
+                order: question.order,
+                rawTypeKey
               });
+              if (statementChoiceOptions.length > 0) {
+                labelIndexedOptions(statementChoiceOptions).forEach((option) => {
+                  lines.push({
+                    type: 'choice',
+                    text: formatOptionText(option),
+                    correct: option.correct
+                  });
+                });
+              }
               addExplanationLines(lines, question, question.order, explanationsByOrder, {
-                answer: directAnswer,
+                answer: '',
+                questionText: fallback,
+                choices: renderedChoiceOptions.map((option) => ({
+                  ...option,
+                  displayText: formatOptionText(option),
+                  correct: option.correct
+                }))
+              }, useReadingExplanation);
+              emittedQuestionOrders.add(String(question.order));
+            }
+            continue;
+          }
+
+          if (answers.length === 0 && !isMatchingHeadings) {
+            if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
+              const questionTitleText = `Question ${question.order}`;
+              lines.push({
+                type: 'questionTitle',
+                text: questionTitleText,
+                questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || `- [__${question.order}__]`) : '',
+                order: question.order,
+                rawTypeKey
+              });
+              if (fallback && !isStatementQuestionType(rawTypeKey)) {
+                lines.push({
+                  type: 'questionText',
+                  text: fallback
+                });
+              }
+              if (statementChoiceOptions.length > 0) {
+                labelIndexedOptions(statementChoiceOptions).forEach((option) => {
+                  lines.push({
+                    type: 'choice',
+                    text: formatOptionText(option),
+                    correct: option.correct
+                  });
+                });
+              }
+              addExplanationLines(lines, question, question.order, explanationsByOrder, {
+                answer: '',
                 questionText: fallback
               }, useReadingExplanation);
               emittedQuestionOrders.add(String(question.order));
@@ -1227,22 +2021,49 @@ export function createReadingCore() {
             continue;
           }
 
-          pushQuestionGroupLines(lines, question, answers);
-
-          if (rawTypeKey === 'MULTIPLE_CHOICE_MANY' && !emittedQuestionOrders.has(String(question.order))) {
-            renderedChoiceOptions.forEach((option) => {
+          if (answers.length === 0 && isMatchingHeadings) {
+            if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
+              const questionTitleText = `Question ${question.order}`;
               lines.push({
-                type: 'choice',
-                text: formatOptionText(option),
-                correct: option.correct
+                type: 'questionTitle',
+                text: questionTitleText,
+                questionHtml: String(question.text || question.content || question.title || fallback || '').trim(),
+                order: question.order,
+                rawTypeKey
               });
-            });
+              addExplanationLines(lines, question, question.order, explanationsByOrder, {
+                answer: '',
+                questionText: fallback,
+                choices: renderedChoiceOptions.map((option) => ({
+                  ...option,
+                  displayText: formatOptionText(option),
+                  correct: option.correct
+                }))
+              }, useReadingExplanation);
+              emittedQuestionOrders.add(String(question.order));
+            }
+            continue;
           }
 
           answers.forEach((answer, index) => {
             const order = answer.order || (answers.length === 1 ? question.order : question.order + index);
-            lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
-            lines.push({ type: 'questionText', text: formatGapQuestionLabel(answer.questionText, order, rawTypeKey) });
+            const promptText = formatGapQuestionLabel(
+              answer.questionText || (rawTypeKey === 'SUMMARY_COMPLETION' ? fallback : ''),
+              order,
+              rawTypeKey
+            );
+            const questionTitleText = `Question ${order}`;
+            lines.push({
+              type: 'questionTitle',
+              text: order ? questionTitleText : 'Question',
+              questionText: (isStatementQuestionType(rawTypeKey) || rawTypeKey === 'SUMMARY_COMPLETION') ? promptText : '',
+              answerText: rawTypeKey === 'SUMMARY_COMPLETION' ? String(answer.answer || directAnswer || '').trim() : '',
+              order,
+              rawTypeKey
+            });
+            if (!isStatementQuestionType(rawTypeKey) && rawTypeKey !== 'SUMMARY_COMPLETION' && rawTypeKey !== 'MULTIPLE_CHOICE_MANY') {
+              lines.push({ type: 'questionText', text: promptText });
+            }
             if (isMultipleChoiceOne) {
               labelIndexedOptions(renderedChoiceOptions).forEach((option) => {
                 lines.push({
@@ -1251,11 +2072,19 @@ export function createReadingCore() {
                   correct: option.correct || option.option === choiceAnswer
                 });
               });
-            } else if (rawTypeKey !== 'MULTIPLE_CHOICE_MANY') {
+            } else if (statementChoiceOptions.length > 0) {
+              labelIndexedOptions(statementChoiceOptions).forEach((option) => {
+                lines.push({
+                  type: 'choice',
+                  text: formatOptionText(option),
+                  correct: option.correct
+                });
+              });
+            } else if (rawTypeKey !== 'MULTIPLE_CHOICE_MANY' && !isSharedOptionGroup) {
               pushSharedOptions(lines, renderSharedOptions, emittedSharedOptionGroups, question.shared_option_group_key);
             }
             addExplanationLines(lines, question, order, explanationsByOrder, {
-              answer: (isMultipleChoiceOne || rawTypeKey === 'MULTIPLE_CHOICE_MANY') ? '' : answer.answer,
+              answer: (isMultipleChoiceOne || rawTypeKey === 'MULTIPLE_CHOICE_MANY' || isStatementQuestionType(rawTypeKey)) ? '' : answer.answer,
               questionText: answer.questionText,
               choices: renderedChoiceOptions.map((option) => ({
                 ...option,

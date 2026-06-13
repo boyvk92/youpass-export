@@ -23,10 +23,12 @@ export function paragraph(text) {
 }
 
 export function styledParagraph(text, options = {}) {
-  const { align = '', bold = false, color = '', size = '', before = '', after = '' } = options;
+  const { align = '', bold = false, color = '', size = '', before = '', after = '', indentLeft = '', pStyle = '' } = options;
   const paragraphProps = [
+    pStyle ? `<w:pStyle w:val="${pStyle}"/>` : '',
     align ? `<w:jc w:val="${align}"/>` : '',
-    before || after ? `<w:spacing${before ? ` w:before="${before}"` : ''}${after ? ` w:after="${after}"` : ''}/>` : ''
+    before || after ? `<w:spacing${before ? ` w:before="${before}"` : ''}${after ? ` w:after="${after}"` : ''}/>` : '',
+    indentLeft !== '' ? `<w:ind w:left="${indentLeft}"/>` : ''
   ].join('');
   const runProps = [
     bold ? '<w:b/>' : '',
@@ -42,7 +44,7 @@ export function readingTestTitle(text) {
 }
 
 export function passageLabel(text) {
-  return styledParagraph(text, { bold: true, color: '0F4C5C', size: '36', before: '160', after: '220' });
+  return styledParagraph(text, { pStyle: 'Heading1', bold: true, color: '0F4C5C', size: '36', before: '160', after: '220' });
 }
 
 export function passageTitle(text) {
@@ -70,29 +72,50 @@ export function pageBreakParagraph() {
 }
 
 export function questionGroup(text) {
-  return `<w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="1F6FEB"/><w:sz w:val="28"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:pStyle w:val="Heading2"/><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="1F6FEB"/><w:sz w:val="28"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 export function questionTitle(text) {
-  return `<w:p><w:pPr><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+export function questionTitleWithText(title, text, separator = '. ') {
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(title)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(separator)}${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+export function questionTitleWithHtml(title, html, separator = '. ', options = {}) {
+  const { size = '26', color = '', imageRegistry = [] } = options;
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(title)}</w:t></w:r><w:r><w:rPr><w:sz w:val="${size}"/></w:rPr><w:t xml:space="preserve">${escapeXml(separator)}</w:t></w:r>${htmlToDocxInlineRuns(html, { size, color, imageRegistry })}</w:p>`;
+}
+
+export function questionTitleWithAnswer(title, text, answerText, separator = '. ', answerSeparator = ' -> ') {
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(title)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(separator)}${escapeXml(text)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(answerSeparator)}</w:t></w:r><w:r><w:rPr><w:color w:val="C00000"/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(answerText)}</w:t></w:r></w:p>`;
+}
+
+export function questionTitleWithTrailingAnswer(title, text, answerText, separator = '. ') {
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(title)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(separator)}${escapeXml(text)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r><w:r><w:rPr><w:color w:val="C00000"/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(answerText)}</w:t></w:r></w:p>`;
+}
+
+export function questionTitleWithAnswerOnly(title, answerText, separator = '. ', answerSeparator = ' -> ') {
+  return `<w:p><w:pPr><w:pStyle w:val="Heading3"/><w:spacing w:before="160" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(title)}</w:t></w:r><w:r><w:rPr><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(separator)}${escapeXml(answerSeparator)}</w:t></w:r><w:r><w:rPr><w:color w:val="C00000"/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(answerText)}</w:t></w:r></w:p>`;
 }
 
 export function questionTextParagraph(text) {
-  return `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/><w:ind w:left="720"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 export function answerParagraph(text) {
-  return `<w:p><w:pPr><w:spacing w:before="20" w:after="40"/><w:shd w:fill="00FFFF"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="40"/><w:ind w:left="720"/><w:shd w:fill="00FFFF"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 export function choiceParagraph(line) {
   const shading = line.correct ? '<w:shd w:fill="00FFFF"/>' : '';
   const bold = line.correct ? '<w:b/>' : '';
-  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/><w:ind w:left="720"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
 }
 
 export function questionInfoParagraph(text) {
-  return styledParagraph(text, { color: '555555', size: '22', before: '20', after: '20' });
+  return styledParagraph(text, { color: '555555', size: '22', before: '20', after: '20', indentLeft: '720' });
 }
 
 export function heading(text) {
@@ -104,7 +127,7 @@ export function explanationParagraph(line = {}) {
   const answerTokens = Array.isArray(line.answerTokens) ? line.answerTokens : [];
   const answerTextMap = line.answerTextMap instanceof Map ? line.answerTextMap : new Map();
 
-  return `<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">${escapeXml(explanationHtml || answerTokens.join(', ') || Array.from(answerTextMap.keys()).join(', '))}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:spacing w:before="40" w:after="40"/><w:ind w:left="1440"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">${escapeXml(explanationHtml || answerTokens.join(', ') || Array.from(answerTextMap.keys()).join(', '))}</w:t></w:r></w:p>`;
 }
 
 export function escapeHtml(value) {
@@ -486,12 +509,100 @@ export function htmlToDocxParagraphs(html, options = {}) {
   return htmlToDocxInlineParagraphs(source, options);
 }
 
-export function htmlToDocxInlineParagraphs(source, options = {}) {
+export function htmlToDocxInlineRuns(source, options = {}) {
   const { size = '24', color = '', bold = false, imageRegistry = [] } = options;
+  const tokens = String(source ?? '').match(/<[^>]+>|[^<]+/g) || [];
+  const images = Array.isArray(imageRegistry) ? imageRegistry : [];
+  let runs = [];
+  let style = { bold, italic: false, underline: false, color: '' };
+
+  const findImageMeta = (src) => {
+    const normalized = decodeHtmlEntities(String(src ?? '')).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    return images.find((item) => item.src === normalized) || null;
+  };
+
+  const pushRun = (text) => {
+    const value = decodeHtmlEntities(String(text ?? '').replace(/\s+/g, ' '));
+    if (!value.trim()) {
+      if (runs.length > 0) {
+        runs.push(runXml(' ', { bold: style.bold, italic: style.italic, underline: style.underline, color, size }));
+      }
+      return;
+    }
+
+    runs.push(runXml(value, {
+      bold: style.bold,
+      italic: style.italic,
+      underline: style.underline,
+      color: style.color || color,
+      size
+    }));
+  };
+
+  for (const token of tokens) {
+    if (token.startsWith('<')) {
+      const tag = token.replace(/[<>]/g, '').trim();
+      const lower = tag.toLowerCase();
+
+      if (/^img\b/i.test(lower)) {
+        const attrs = parseImageAttributes(token);
+        const meta = findImageMeta(attrs.src || attrs['data-src'] || attrs['data-lazy-src'] || '');
+        if (meta) {
+          runs.push(imageParagraph(meta, { alt: attrs.alt || attrs.title || 'image' }));
+        }
+        continue;
+      }
+
+      if (/^br\b/i.test(lower)) {
+        runs.push('<w:r><w:br/></w:r>');
+        continue;
+      }
+
+      if (/^\/?(strong|b)\b/i.test(lower)) {
+        style = { ...style, bold: !lower.startsWith('/') };
+        continue;
+      }
+
+      if (/^\/?(em|i)\b/i.test(lower)) {
+        style = { ...style, italic: !lower.startsWith('/') };
+        continue;
+      }
+
+      if (/^\/?u\b/i.test(lower)) {
+        style = { ...style, underline: !lower.startsWith('/') };
+        continue;
+      }
+
+      if (/^\/?font\b/i.test(lower)) {
+        if (lower.startsWith('/')) {
+          style = { ...style, color: '' };
+        } else {
+          const attrs = parseImageAttributes(token);
+          const nextColor = String(attrs.color || attrs['data-color'] || attrs['data-docx-color'] || '').trim().replace(/^#/, '');
+          style = { ...style, color: nextColor || style.color };
+        }
+        continue;
+      }
+
+      continue;
+    }
+
+    pushRun(token);
+  }
+
+  return runs.join('');
+}
+
+export function htmlToDocxInlineParagraphs(source, options = {}) {
+  const { size = '24', color = '', bold = false, imageRegistry = [], indentLeft = '' } = options;
   const tokens = source.match(/<[^>]+>|[^<]+/g) || [];
   const paragraphs = [];
   let runs = [];
-  let style = { bold, italic: false, underline: false };
+  let style = { bold, italic: false, underline: false, color: '' };
   const images = Array.isArray(imageRegistry) ? imageRegistry : [];
   let inListItem = false;
   let listItemPrefixPending = false;
@@ -518,7 +629,7 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
       bold: style.bold,
       italic: style.italic,
       underline: style.underline,
-      color,
+      color: style.color || color,
       size
     }));
   };
@@ -528,7 +639,8 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
       return;
     }
 
-    paragraphs.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>${runs.join('')}</w:p>`);
+    const indentXml = indentLeft !== '' ? `<w:ind w:left="${indentLeft}"/>` : '';
+    paragraphs.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="40"/>${indentXml}</w:pPr>${runs.join('')}</w:p>`);
     runs = [];
   };
 
@@ -567,6 +679,17 @@ export function htmlToDocxInlineParagraphs(source, options = {}) {
 
       if (/^\/?u\b/i.test(lower)) {
         style = { ...style, underline: !lower.startsWith('/') };
+        continue;
+      }
+
+      if (/^\/?font\b/i.test(lower)) {
+        if (lower.startsWith('/')) {
+          style = { ...style, color: '' };
+        } else {
+          const attrs = parseImageAttributes(token);
+          const nextColor = String(attrs.color || attrs['data-color'] || attrs['data-docx-color'] || '').trim().replace(/^#/, '');
+          style = { ...style, color: nextColor || style.color };
+        }
         continue;
       }
 
@@ -728,14 +851,14 @@ export function htmlTableToDocx(tableHtml, options = {}) {
   </w:tbl>`;
 }
 
-export function questionDescriptionHtml(html) {
-  return htmlToDocxParagraphs(html, { size: '24' });
+export function questionDescriptionHtml(html, options = {}) {
+  return htmlToDocxParagraphs(html, { size: '24', ...options });
 }
 
 export function runXml(text, options = {}) {
   const { bold = false, color = '', italic = false, size = '', underline = false } = options;
   const runProps = [
-    bold ? '<w:b/>' : '',
+    bold === true ? '<w:b/>' : (bold === false ? '<w:b w:val="false"/>' : ''),
     color ? `<w:color w:val="${color}"/>` : '',
     italic ? '<w:i/>' : '',
     underline ? '<w:u w:val="single"/>' : '',
@@ -827,7 +950,39 @@ export function cleanExplanationLine(line) {
 
 export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new Map(), rawTypeKey = '') {
   const source = String(html ?? '');
-  const stripped = source
+  const isMatchingAnswerType = rawTypeKey === 'MATCHING_FEATURES' || rawTypeKey === 'MATCHING_ENDINGS';
+  const escapeRegExp = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wrapMatchingChoiceText = (choiceText) => `<strong>&quot;${escapeHtml(choiceText.length > 70 ? `${choiceText.slice(0, 67).trimEnd()}...` : choiceText)}&quot;</strong>`;
+  let preprocessedSource = source;
+
+  if (isMatchingAnswerType) {
+    const normalizedChoiceEntries = Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
+      .map(([key, value]) => [normalizeChoiceLabel(key), String(value ?? '').trim()])
+      .filter(([key, value]) => Boolean(key) && Boolean(value));
+
+    normalizedChoiceEntries.forEach(([choiceKey, choiceText]) => {
+      const safeKey = escapeRegExp(choiceKey);
+      const replacement = wrapMatchingChoiceText(choiceText);
+      preprocessedSource = preprocessedSource.replace(
+        new RegExp(`<\\s*${safeKey}\\s*>`, 'gi'),
+        replacement
+      );
+      preprocessedSource = preprocessedSource.replace(
+        new RegExp(`&lt;\\s*${safeKey}\\s*&gt;`, 'gi'),
+        replacement
+      );
+      preprocessedSource = preprocessedSource.replace(
+        new RegExp(`<\\s*(?:strong|b)\\s*>\\s*${safeKey}\\s*<\\s*\\/\\s*(?:strong|b)\\s*>`, 'gi'),
+        replacement
+      );
+      preprocessedSource = preprocessedSource.replace(
+        new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${safeKey}\\b`, 'gi'),
+        `Đáp án ${replacement}`
+      );
+    });
+  }
+
+  const stripped = preprocessedSource
     .replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
     .replaceAll(/(<(?:p|div|li|span|h[1-6])\b[^>]*>)\s*(\{\[|\{\{)/gi, '$1')
     .replaceAll(/^\s*(\{\[|\{\{)\s*/gi, '')
@@ -847,6 +1002,8 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
       .map(([key, value]) => [normalizeChoiceLabel(key), String(value ?? '').trim()])
       .filter(([, value]) => Boolean(value))
   );
+
+  const getChoiceText = (key) => normalizedChoiceMap.get(normalizeChoiceLabel(key)) || '';
 
   const isStandaloneAnswerText = (value) => {
     const text = htmlToText(value).replace(/\u00a0/g, ' ').trim();
@@ -874,7 +1031,7 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
   };
 
   const replaceAnswerRefs = (htmlText) => {
-    const output = decodeHtmlEntities(String(htmlText ?? ''));
+    const output = isMatchingAnswerType ? String(htmlText ?? '') : decodeHtmlEntities(String(htmlText ?? ''));
     const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
     const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
     const replaceWithChoice = (match, key) => {
@@ -886,6 +1043,10 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
       const displayText = choiceText.length > 70
         ? `${choiceText.slice(0, 67).trimEnd()}...`
         : choiceText;
+
+      if (isMatchingAnswerType) {
+        return `<strong>&quot;${escapeHtml(displayText)}&quot;</strong>`;
+      }
 
       return `Đáp án "<strong>${escapeHtml(displayText)}</strong>"`;
     };
@@ -916,7 +1077,13 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
     /<li\b[^>]*>\s*([^<]{1,80})\s*<\/li>/gi
   ];
 
-  let normalizedHtml = replaceAnswerRefs(stripped);
+  let normalizedHtml = replaceAnswerRefs(preprocessedSource.replaceAll(/<p>\s*(\{\[|\{\{)\s*<\/p>/gi, '')
+    .replaceAll(/(<(?:p|div|li|span|h[1-6])\b[^>]*>)\s*(\{\[|\{\{)/gi, '$1')
+    .replaceAll(/^\s*(\{\[|\{\{)\s*/gi, '')
+    .replaceAll(/(\]\}|\}\})\s*(?=<\/(?:p|div|li|span|h[1-6])>)/gi, '')
+    .replaceAll(/\s*(\]\}|\}\})\s*$/gi, '')
+    .replaceAll(/<p>\s*Câu\s+\d+\s*[:.]\s*<\/p>/gi, '')
+    .replaceAll(/<p>\s*Question\s+\d+\s*:?\s*<\/p>/gi, ''));
   for (const pattern of answerBlockPatterns) {
     normalizedHtml = normalizedHtml.replace(pattern, (match, inner) => {
       const text = htmlToText(inner ?? match).trim();
@@ -962,18 +1129,21 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
   return normalizedHtml;
 }
 
-export function replaceAnswerRefsInXml(xml, answerTextMap = new Map()) {
+export function replaceAnswerRefsInXml(xml, answerTextMap = new Map(), rawTypeKey = '') {
   const normalizedChoiceMap = new Map(
     Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
       .map(([key, value]) => [String(key).trim().toUpperCase(), String(value ?? '').trim()])
       .filter(([, value]) => Boolean(value))
   );
+  const isMatchingAnswerType = rawTypeKey === 'MATCHING_FEATURES' || rawTypeKey === 'MATCHING_ENDINGS';
 
   let output = String(xml ?? '');
   const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
   const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
   normalizedChoiceMap.forEach((choiceText, choiceKey) => {
-    const replacement = `Đáp án &quot;${escapeXml(choiceText)}&quot;`;
+    const replacement = isMatchingAnswerType
+      ? `<strong>&quot;${escapeXml(choiceText)}&quot;</strong>`
+      : `Đáp án &quot;${escapeXml(choiceText)}&quot;`;
     output = output.replace(
       new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${strongTagPattern}${choiceKey}${strongClosePattern}`, 'gi'),
       replacement
@@ -995,56 +1165,27 @@ export function questionKeywordsParagraphs(keywords = []) {
   if (!Array.isArray(keywords) || keywords.length === 0) {
     return '';
   }
-
-  const body = keywords.map((keyword) => `<w:p><w:pPr><w:spacing w:before="0" w:after="20"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(keyword)}</w:t></w:r></w:p>`).join('');
-  const table = `<w:tbl>
-    <w:tblPr>
-      <w:tblW w:w="5000" w:type="pct"/>
-      <w:tblLayout w:type="fixed"/>
-      <w:tblBorders>
-        <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-      </w:tblBorders>
-    </w:tblPr>
-    <w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid>
-    <w:tr>${tableCellRaw(styledParagraph('Keywords', { bold: true, size: '24' }), { width: 5000 })}</w:tr>
-    <w:tr>${tableCellRaw(body || '<w:p><w:r><w:t xml:space="preserve"></w:t></w:r></w:p>', { width: 5000 })}</w:tr>
-  </w:tbl>`;
-
-  return table;
+  return '';
 }
 
-export function questionExplanationBlock(explanationHtml = '', answerTokens = [], answerTextMap = new Map()) {
+export function questionExplanationBlock(explanationHtml = '', answerTokens = [], answerTextMap = new Map(), rawTypeKey = '') {
   const source = String(explanationHtml ?? '');
   if (!source.trim()) {
     return '';
   }
 
-  const normalizedSource = replaceAnswerRefsInXml(source, answerTextMap);
-  const body = htmlToDocxParagraphs(normalizedSource, { size: '24' });
-  return `<w:tbl>
-    <w:tblPr>
-      <w:tblW w:w="5000" w:type="pct"/>
-      <w:tblLayout w:type="fixed"/>
-      <w:tblBorders>
-        <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-        <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
-      </w:tblBorders>
-    </w:tblPr>
-    <w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid>
-    <w:tr>${tableCellRaw(styledParagraph('Explanation', { italic: true, size: '24' }), { width: 5000 })}</w:tr>
-    <w:tr>${tableCellRaw(body, { width: 5000 })}</w:tr>
-  </w:tbl>`;
+  const normalizedSource = replaceAnswerRefsInXml(source, answerTextMap, rawTypeKey);
+  const body = htmlToDocxParagraphs(normalizedSource, { size: '24', indentLeft: '720' });
+  return [
+    styledParagraph('Lời giải:', { bold: true, size: '24', before: '40', after: '20', indentLeft: '720' }),
+    body
+  ].join('');
 }
 
 export function questionBlockKeywordsAndExplanation(block) {
   return [
     questionKeywordsParagraphs(block.keywords),
-    questionExplanationBlock(block.explanationHtml, block.answerTokens, block.answerTextMap)
+    questionExplanationBlock(block.explanationHtml, block.answerTokens, block.answerTextMap, block.rawTypeKey)
   ].filter(Boolean).join('');
 }
 
@@ -1091,6 +1232,69 @@ export function appendDocxRenderLog(record, filePath = 'logs/e-learning-render-d
   } catch {
     return '';
   }
+}
+
+function buildDocxStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:qFormat/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="Heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:uiPriority w:val="9"/>
+    <w:qFormat/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="240" w:after="120"/>
+      <w:outlineLvl w:val="0"/>
+    </w:pPr>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="36"/>
+      <w:color w:val="0F4C5C"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="Heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:uiPriority w:val="10"/>
+    <w:qFormat/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="240" w:after="120"/>
+      <w:outlineLvl w:val="1"/>
+    </w:pPr>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="28"/>
+      <w:color w:val="1F6FEB"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3">
+    <w:name w:val="Heading 3"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:uiPriority w:val="11"/>
+    <w:qFormat/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="160" w:after="40"/>
+      <w:outlineLvl w:val="2"/>
+    </w:pPr>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="26"/>
+    </w:rPr>
+  </w:style>
+</w:styles>`;
 }
 
 export function appendQuestionTypeLog(rows = [], filePath = 'logs/e-learning-question-types.log', enableFileLogs = true, id = '') {
@@ -1150,6 +1354,33 @@ export function summarizeQuestionTypes(resultLines = []) {
     if (line.type === 'questionGroup') {
       const rawTypeKey = String(line.rawTypeKey ?? '').trim();
       const questionOrder = String(line.questionOrder ?? '').trim();
+      if (!rawTypeKey || !questionOrder || !isReadingRawType(rawTypeKey) || seen.has(rawTypeKey)) {
+        continue;
+      }
+
+      seen.add(rawTypeKey);
+      summaries.push({
+        rawTypeKey,
+        questionOrder
+      });
+    }
+  }
+
+  return summaries;
+}
+
+export function summarizeUnknownQuestionTypes(resultLines = []) {
+  const summaries = [];
+  const seen = new Set();
+
+  for (const line of Array.isArray(resultLines) ? resultLines : []) {
+    if (!line || typeof line !== 'object') {
+      continue;
+    }
+
+    if (line.type === 'questionGroup') {
+      const rawTypeKey = String(line.rawTypeKey ?? '').trim();
+      const questionOrder = String(line.questionOrder ?? '').trim();
       if (!rawTypeKey || !questionOrder || isReadingRawType(rawTypeKey) || seen.has(rawTypeKey)) {
         continue;
       }
@@ -1193,8 +1424,12 @@ export function createDocxCore(deps) {
     questionGroup,
     questionDescriptionHtml,
     questionTitle,
+    questionTitleWithHtml,
     questionTextParagraph,
     questionAnswerParagraph,
+    questionTitleWithAnswerOnly,
+    questionTitleWithAnswer,
+    questionTitleWithTrailingAnswer,
     readingTestTitle,
     passageLabel,
     passageTitle,
@@ -1210,9 +1445,11 @@ export function createDocxCore(deps) {
     formatResult,
     appendDocxRenderLog,
     appendQuestionTypeLog,
+    summarizeUnknownQuestionTypes,
     enableFileLogs = true,
     renderLogFile = 'logs/e-learning-render-docx.log',
     questionTypesLogFile = 'logs/e-learning-question-types.log',
+    unknownQuestionTypesLogFile = 'logs/e-learning-question-types-unknown.log',
     createZip
   } = deps;
 
@@ -1253,10 +1490,22 @@ export function createDocxCore(deps) {
         }
 
         if (line.type === 'questionDescriptionHtml') {
-          return questionDescriptionHtml(line.html);
+          return questionDescriptionHtml(line.html, line.options || {});
         }
 
         if (line.type === 'questionTitle') {
+          if (line.questionHtml) {
+            return questionTitleWithHtml(line.text, line.questionHtml, '. ', { size: '26', imageRegistry });
+          }
+          if (line.rawTypeKey === 'MATCHING_ENDINGS' && line.answerText) {
+            return questionTitleWithTrailingAnswer(line.text, line.questionText || '', line.answerText, '. ');
+          }
+          if (line.answerText) {
+            return questionTitleWithAnswer(line.text, line.questionText || '', line.answerText, '. ', ' -> ');
+          }
+          if (line.questionText) {
+            return questionTitleWithText(line.text, line.questionText, '. ');
+          }
           return questionTitle(line.text);
         }
 
@@ -1300,7 +1549,7 @@ export function createDocxCore(deps) {
         }
 
         if (line.type === 'questionExplanationBlock') {
-          return questionExplanationBlock(line.explanationHtml, line.answerTokens, line.answerTextMap);
+          return questionExplanationBlock(line.explanationHtml, line.answerTokens, line.answerTextMap, line.rawTypeKey);
         }
 
         if (line.type === 'answer') {
@@ -1325,6 +1574,9 @@ export function createDocxCore(deps) {
       ].join('');
 
       const questionTypes = summarizeQuestionTypes(resultLines);
+      const unknownQuestionTypes = typeof summarizeUnknownQuestionTypes === 'function'
+        ? summarizeUnknownQuestionTypes(resultLines)
+        : [];
 
       appendDocxRenderLog({
         exportedAt: new Date().toISOString(),
@@ -1332,10 +1584,12 @@ export function createDocxCore(deps) {
         quizType,
         coverLines,
         resultLines,
-        questionTypes
+        questionTypes,
+        unknownQuestionTypes
       }, renderLogFile, enableFileLogs);
 
       appendQuestionTypeLog(questionTypes, questionTypesLogFile, enableFileLogs, id);
+      appendQuestionTypeLog(unknownQuestionTypes, unknownQuestionTypesLogFile, enableFileLogs, id);
 
       const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
@@ -1365,6 +1619,7 @@ export function createDocxCore(deps) {
   <Default Extension="xml" ContentType="application/xml"/>
   ${imageContentTypes}
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>`
         },
         {
@@ -1374,13 +1629,18 @@ export function createDocxCore(deps) {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`
         },
-        ...(imageRegistry.length > 0 ? [{
+        {
+          name: 'word/styles.xml',
+          data: buildDocxStylesXml()
+        },
+        {
           name: 'word/_rels/document.xml.rels',
           data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   ${imageRelationships}
 </Relationships>`
-        }] : []),
+        },
         ...imageRegistry.map((item) => ({
           name: `word/media/${item.name}`,
           data: item.buffer

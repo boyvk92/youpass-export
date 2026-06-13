@@ -1,5 +1,5 @@
 import { buildCoverPageLines } from '../cover-page.js';
-import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, appendQuestionTypeLog, summarizeQuestionTypes, createZip } from '../skill/common.js';
+import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, questionTitleWithAnswer, questionTitleWithAnswerOnly, questionTitleWithTrailingAnswer, questionTitleWithHtml, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, appendQuestionTypeLog, summarizeQuestionTypes, summarizeUnknownQuestionTypes, createZip } from '../skill/common.js';
 import { createReadingCore, extractYouPassParts, splitPassageContent, getPartQuestions, isFillInTheBlankQuestion, getQuestionRawTypeKey, extractMarkedAnswers, pushQuestionGroupLines, addExplanationLines, getChoiceAnswer, getDirectAnswer, formatOptionText, labelIndexedOptions, pushSharedOptions, formatAreaOfInformation, extractQuestionKeywords, getQuestionTypeLabel, getQuestionRawTypeText, normalizeTypeKey, formatSingleChoiceRadio, formatMultipleChoiceManyOptions, formatSelectionQuestion, formatChoiceOptions, formatSharedOptions, getQuestionOrderRange, collectQuestionAnswerTokens, collectQuestionChoiceTextMap, collectGroupChoiceTextMap, buildExplanationMap } from '../skill/reading.js';
 import { fetchELearningResult, resetTextLogFile, appendJsonLogLine } from './helper.js';
 
@@ -37,7 +37,8 @@ export function createExportDocsCore(deps) {
     enableFileLogs = true,
     exportLogFile = 'logs/e-learning-export-log.log',
     renderLogFile = 'logs/e-learning-render-docx.log',
-    questionTypesLogFile = 'logs/e-learning-question-types.log'
+    questionTypesLogFile = 'logs/e-learning-question-types.log',
+    unknownQuestionTypesLogFile = 'logs/e-learning-question-types-unknown.log'
   } = deps;
 
   const readingCore = createReadingCore({
@@ -81,8 +82,12 @@ export function createExportDocsCore(deps) {
     questionGroup,
     questionDescriptionHtml,
     questionTitle,
+    questionTitleWithHtml,
     questionTextParagraph,
     questionAnswerParagraph,
+    questionTitleWithAnswer,
+    questionTitleWithAnswerOnly,
+    questionTitleWithTrailingAnswer,
     readingTestTitle,
     passageLabel,
     passageTitle,
@@ -99,7 +104,9 @@ export function createExportDocsCore(deps) {
     appendDocxRenderLog,
     appendQuestionTypeLog,
     summarizeQuestionTypes,
+    summarizeUnknownQuestionTypes,
     questionTypesLogFile,
+    unknownQuestionTypesLogFile,
     createZip,
     formatYouPassResult: readingCore.formatYouPassResult
   });
@@ -130,6 +137,7 @@ export function createExportDocsCore(deps) {
       resetTextLogFile(exportLogFile, enableFileLogs);
       resetTextLogFile(renderLogFile, enableFileLogs);
       resetTextLogFile(questionTypesLogFile, enableFileLogs);
+      resetTextLogFile(unknownQuestionTypesLogFile, enableFileLogs);
 
       const result = await fetchELearningResult({ apiUrl, id: resolvedId, token });
       appendJsonLogLine(readingCore.buildCleanExportRecord({ id: resolvedId, result, quizTypeOverride: resolvedSkill }), exportLogFile, enableFileLogs);

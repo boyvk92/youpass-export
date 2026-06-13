@@ -25,7 +25,8 @@ export function createExportMultiCore(deps) {
     enableFileLogs = true,
     exportLogFile = 'logs/e-learning-export-log.log',
     renderLogFile = 'logs/e-learning-render-docx.log',
-    questionTypesLogFile = 'logs/e-learning-question-types.log'
+    questionTypesLogFile = 'logs/e-learning-question-types.log',
+    unknownQuestionTypesLogFile = 'logs/e-learning-question-types-unknown.log'
   } = deps;
 
   async function buildBulkZip({ fixedParams = {}, skill, token }) {
@@ -44,6 +45,7 @@ export function createExportMultiCore(deps) {
     resetTextLogFile(exportLogFile, enableFileLogs);
     resetTextLogFile(renderLogFile, enableFileLogs);
     resetTextLogFile(questionTypesLogFile, enableFileLogs);
+    resetTextLogFile(unknownQuestionTypesLogFile, enableFileLogs);
 
     while (total === null || fetchedCount < total) {
       const listUrl = buildFixedBulkListUrl({
