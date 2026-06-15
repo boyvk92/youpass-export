@@ -1,5 +1,6 @@
 import {
   buildFixedBulkListUrl,
+  buildCmsAssetUrl,
   extractMockTestEntries,
   extractMockTestFinalId,
   extractMockTestGroupId,
@@ -7,6 +8,7 @@ import {
   extractQuizListTotal,
   fetchMockTestDetail,
   fetchQuizList,
+  fetchBinaryAsset,
   fetchELearningResult,
   resetTextLogFile,
   appendJsonLogLine,
@@ -15,6 +17,84 @@ import {
   normalizeAuthorizationToken,
   sanitizeFileNamePart
 } from './helper.js';
+import { normalizeListeningExportResult } from '../skill/listening.js';
+
+function buildBulkFolderPath(title = '') {
+  const segments = String(title ?? '')
+    .replace(/^\s*\d+\s*[-–—]\s*/, '')
+    .split(/\s+[–—-]\s+/)
+    .map((segment) => sanitizeFileNamePart(segment))
+    .filter(Boolean);
+
+  if (segments.length <= 1) {
+    return '';
+  }
+
+  return segments.join('/');
+}
+
+function splitListeningTitlePath(title = '') {
+  const cleaned = String(title ?? '').trim().replace(/^\s*\d+\s*[-–—]\s*/, '');
+  if (!cleaned) {
+    return [];
+  }
+
+  return cleaned
+    .split(/\s*[-–—]\s*/)
+    .map((segment) => sanitizeFileNamePart(segment))
+    .filter(Boolean);
+}
+
+function buildListeningBaseName(id, title = '') {
+  return sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`;
+}
+
+function buildListeningPartFolderPath(titlePath, partIndex) {
+  const path = String(titlePath || '').trim();
+  const passFolder = `Pass ${partIndex + 1}`;
+  return [path, passFolder].filter(Boolean).join('/');
+}
+
+function buildBulkDocxFileName({ id, partTitle = '', partIndex = 0 }) {
+  const normalizedPartTitle = String(partTitle ?? '').trim();
+  const passLabel = partIndex + 1;
+  return `${sanitizeFileNamePart(`${id}-${passLabel}-${normalizedPartTitle || `Passage ${passLabel}`}`) || `quiz-${id}`}.docx`;
+}
+
+async function addListeningZipEntries(zip, { id, title, createDocx, result, quizTypeOverride, noAudio = false }) {
+  const baseName = buildListeningBaseName(id, title);
+  const titlePath = splitListeningTitlePath(title).join('/');
+  const parts = Array.isArray(result?.data?.parts) && result.data.parts.length > 0
+    ? result.data.parts
+    : (Array.isArray(result?.data?.part) && result.data.part.length > 0 ? result.data.part : [null]);
+
+  for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+    const part = parts[partIndex];
+    const resultForDoc = part
+      ? {
+        ...result,
+        data: {
+          ...result.data,
+          part: [part],
+          parts: [part]
+        }
+      }
+      : result;
+    const docx = await createDocx({ id, result: resultForDoc, quizTypeOverride });
+    const fileId = String(part?.file_id || part?.part?.file_id || result?.data?.file_id || '').trim();
+    const folderPath = buildListeningPartFolderPath(titlePath, partIndex);
+    const folder = zip.folder(folderPath);
+    folder.file(`${baseName}.docx`, docx);
+
+    if (!noAudio && fileId) {
+      const audioAsset = await fetchBinaryAsset(buildCmsAssetUrl(fileId));
+      const audioExt = audioAsset?.ext || 'mp3';
+      if (audioAsset?.buffer) {
+        folder.file(`Pass ${partIndex + 1}.${audioExt}`, audioAsset.buffer);
+      }
+    }
+  }
+}
 
 export function createExportMultiCore(deps) {
   const {
@@ -30,6 +110,9 @@ export function createExportMultiCore(deps) {
   } = deps;
 
   async function buildBulkZip({ fixedParams = {}, skill, token }) {
+    const createFolders = Boolean(fixedParams?.create_folders);
+    const noAudio = Boolean(fixedParams?.no_audio);
+    const isListening = normalizeSkillValue(skill) === 'listening';
     const JSZipClass = (await import('jszip')).default;
     const zip = new JSZipClass();
     const errors = [];
@@ -91,15 +174,53 @@ export function createExportMultiCore(deps) {
 
               seenIds.add(exportId);
               const result = await fetchELearningResult({ apiUrl, id: exportId, token });
-              const title = htmlToText(result?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
+              const exportResult = isListening ? normalizeListeningExportResult(result) : result;
+              const title = htmlToText(exportResult?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
+              if (isListening) {
+                if (typeof buildCleanExportRecord === 'function') {
+                  appendJsonLogLine(buildCleanExportRecord({ id: exportId, result: exportResult, quizTypeOverride }), exportLogFile, enableFileLogs);
+                }
+            await addListeningZipEntries(zip, { id: exportId, title, createDocx, result: exportResult, quizTypeOverride, noAudio });
+            addedCount += 1;
+            continue;
+          }
+
+              const folderPath = createFolders && normalizeSkillValue(skill) === 'reading'
+                ? buildBulkFolderPath(title)
+                : '';
+              const readingParts = normalizeSkillValue(skill) === 'reading' && Array.isArray(result?.data?.parts) && result.data.parts.length > 0
+                ? result.data.parts
+                : [null];
               if (typeof buildCleanExportRecord === 'function') {
                 appendJsonLogLine(buildCleanExportRecord({ id: exportId, result, quizTypeOverride }), exportLogFile, enableFileLogs);
               }
-              const docx = await createDocx({ id: exportId, result, quizTypeOverride });
-              const fileName = `${sanitizeFileNamePart(`${exportId} - ${title}`) || `quiz-${exportId}`}.docx`;
+              for (let partIndex = 0; partIndex < readingParts.length; partIndex += 1) {
+                const part = readingParts[partIndex];
+                const partTitle = part ? htmlToText(part.title || part.question_group_title || part.passage_title || `Passage ${partIndex + 1}`) : '';
+                const resultForDoc = part
+                  ? {
+                    ...result,
+                    data: {
+                      ...result.data,
+                      part: [part],
+                      parts: [part]
+                    }
+                  }
+                  : result;
+                const docx = await createDocx({ id: exportId, result: resultForDoc, quizTypeOverride });
+                const fileName = buildBulkDocxFileName({
+                  id: exportId,
+                  partTitle,
+                  partIndex
+                });
 
-              zip.file(fileName, docx);
-              addedCount += 1;
+                if (folderPath) {
+                  zip.folder(folderPath).file(fileName, docx);
+                } else {
+                  zip.file(fileName, docx);
+                }
+                addedCount += 1;
+              }
             } catch (error) {
               errors.push(`${seedId}: ${error.message}`);
             }
@@ -116,15 +237,53 @@ export function createExportMultiCore(deps) {
 
         try {
           const result = await fetchELearningResult({ apiUrl, id, token });
-          const title = htmlToText(result?.data?.title || item?.title || `quiz-${id}`);
+          const exportResult = isListening ? normalizeListeningExportResult(result) : result;
+          const title = htmlToText(exportResult?.data?.title || item?.title || `quiz-${id}`);
+          if (isListening) {
+            if (typeof buildCleanExportRecord === 'function') {
+              appendJsonLogLine(buildCleanExportRecord({ id, result: exportResult, quizTypeOverride }), exportLogFile, enableFileLogs);
+            }
+            await addListeningZipEntries(zip, { id, title, createDocx, result: exportResult, quizTypeOverride, noAudio });
+            addedCount += 1;
+            continue;
+          }
+
+          const folderPath = createFolders && normalizeSkillValue(skill) === 'reading'
+            ? buildBulkFolderPath(title)
+            : '';
+          const readingParts = normalizeSkillValue(skill) === 'reading' && Array.isArray(result?.data?.parts) && result.data.parts.length > 0
+            ? result.data.parts
+            : [null];
           if (typeof buildCleanExportRecord === 'function') {
             appendJsonLogLine(buildCleanExportRecord({ id, result, quizTypeOverride }), exportLogFile, enableFileLogs);
           }
-          const docx = await createDocx({ id, result, quizTypeOverride });
-          const fileName = `${sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`}.docx`;
+          for (let partIndex = 0; partIndex < readingParts.length; partIndex += 1) {
+            const part = readingParts[partIndex];
+            const partTitle = part ? htmlToText(part.title || part.question_group_title || part.passage_title || `Passage ${partIndex + 1}`) : '';
+            const resultForDoc = part
+              ? {
+                ...result,
+                data: {
+                  ...result.data,
+                  part: [part],
+                  parts: [part]
+                }
+              }
+              : result;
+            const docx = await createDocx({ id, result: resultForDoc, quizTypeOverride });
+            const fileName = buildBulkDocxFileName({
+              id,
+              partTitle,
+              partIndex
+            });
 
-          zip.file(fileName, docx);
-          addedCount += 1;
+            if (folderPath) {
+              zip.folder(folderPath).file(fileName, docx);
+            } else {
+              zip.file(fileName, docx);
+            }
+            addedCount += 1;
+          }
         } catch (error) {
           errors.push(`${id}: ${error.message}`);
         }

@@ -1,7 +1,8 @@
 import { buildCoverPageLines } from '../cover-page.js';
 import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, questionTitleWithAnswer, questionTitleWithAnswerOnly, questionTitleWithTrailingAnswer, questionTitleWithHtml, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, appendQuestionTypeLog, summarizeQuestionTypes, summarizeUnknownQuestionTypes, createZip } from '../skill/common.js';
 import { createReadingCore, extractYouPassParts, splitPassageContent, getPartQuestions, isFillInTheBlankQuestion, getQuestionRawTypeKey, extractMarkedAnswers, pushQuestionGroupLines, addExplanationLines, getChoiceAnswer, getDirectAnswer, formatOptionText, labelIndexedOptions, pushSharedOptions, formatAreaOfInformation, extractQuestionKeywords, getQuestionTypeLabel, getQuestionRawTypeText, normalizeTypeKey, formatSingleChoiceRadio, formatMultipleChoiceManyOptions, formatSelectionQuestion, formatChoiceOptions, formatSharedOptions, getQuestionOrderRange, collectQuestionAnswerTokens, collectQuestionChoiceTextMap, collectGroupChoiceTextMap, buildExplanationMap } from '../skill/reading.js';
-import { fetchELearningResult, resetTextLogFile, appendJsonLogLine } from './helper.js';
+import { buildListeningPassageBlocks, buildListeningQuestionInfoText, normalizeListeningExportResult } from '../skill/listening.js';
+import { buildCmsAssetUrl, fetchBinaryAsset, fetchELearningResult, resetTextLogFile, appendJsonLogLine, sanitizeFileNamePart, normalizeSkillValue } from './helper.js';
 
 function extractQuizInfo(source) {
   const value = String(source ?? '').trim();
@@ -27,6 +28,70 @@ function extractQuizInfo(source) {
   return { id: value, skill: '' };
 }
 
+function splitListeningTitlePath(title = '') {
+  const cleaned = String(title ?? '').trim().replace(/^\s*\d+\s*[-–—]\s*/, '');
+  if (!cleaned) {
+    return [];
+  }
+
+  return cleaned
+    .split(/\s*[-–—]\s*/)
+    .map((segment) => sanitizeFileNamePart(segment))
+    .filter(Boolean);
+}
+
+function buildListeningBaseName(id, title) {
+  return sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`;
+}
+
+function buildListeningPartFolderPath(basePath, partIndex) {
+  const passFolder = `Pass ${partIndex + 1}`;
+  return [basePath, passFolder].filter(Boolean).join('/');
+}
+
+async function buildListeningZip({ id, title, createDocx, result, quizTypeOverride }) {
+  const baseName = buildListeningBaseName(id, title);
+  const titlePath = splitListeningTitlePath(title);
+  const parts = Array.isArray(result?.data?.parts) && result.data.parts.length > 0
+    ? result.data.parts
+    : (Array.isArray(result?.data?.part) && result.data.part.length > 0 ? result.data.part : [null]);
+  const files = [];
+
+  for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+    const part = parts[partIndex];
+    const resultForDoc = part
+      ? {
+        ...result,
+        data: {
+          ...result.data,
+          part: [part],
+          parts: [part]
+        }
+      }
+      : result;
+    const docx = await createDocx({ id, result: resultForDoc, quizTypeOverride });
+    const fileId = String(part?.file_id || part?.part?.file_id || result?.data?.file_id || '').trim();
+    const audioAsset = fileId ? await fetchBinaryAsset(buildCmsAssetUrl(fileId)) : null;
+    const audioExt = audioAsset?.ext || 'mp3';
+    const passFolder = buildListeningPartFolderPath(titlePath.join('/'), partIndex);
+    const passFileName = `${baseName}.docx`;
+
+    files.push({
+      name: `${passFolder}/${passFileName}`,
+      data: docx
+    });
+
+    if (audioAsset?.buffer) {
+      files.push({
+        name: `${passFolder}/Pass ${partIndex + 1}.${audioExt}`,
+        data: audioAsset.buffer
+      });
+    }
+  }
+
+  return createZip(files);
+}
+
 export function createExportDocsCore(deps) {
   const {
     collectBody,
@@ -42,6 +107,11 @@ export function createExportDocsCore(deps) {
   } = deps;
 
   const readingCore = createReadingCore({
+    buildPassageBlocks: (part, data, quizTypeKey) => (quizTypeKey === 'listening' ? buildListeningPassageBlocks(part?.vocabs) : []),
+    buildQuestionInfoText: (question, context = {}, rowIndex = 0) => {
+      const part = context?.part || {};
+      return buildListeningQuestionInfoText(question, part?.vocabs, rowIndex);
+    },
     extractYouPassParts,
     splitPassageContent,
     getPartQuestions,
@@ -139,9 +209,22 @@ export function createExportDocsCore(deps) {
       resetTextLogFile(questionTypesLogFile, enableFileLogs);
       resetTextLogFile(unknownQuestionTypesLogFile, enableFileLogs);
 
+      const isListening = normalizeSkillValue(resolvedSkill) === 'listening';
       const result = await fetchELearningResult({ apiUrl, id: resolvedId, token });
-      appendJsonLogLine(readingCore.buildCleanExportRecord({ id: resolvedId, result, quizTypeOverride: resolvedSkill }), exportLogFile, enableFileLogs);
-      const docx = await docxCore.createDocx({ id: resolvedId, result, quizTypeOverride: resolvedSkill });
+      const exportResult = isListening ? normalizeListeningExportResult(result) : result;
+      appendJsonLogLine(readingCore.buildCleanExportRecord({ id: resolvedId, result: exportResult, quizTypeOverride: resolvedSkill }), exportLogFile, enableFileLogs);
+      const docx = await docxCore.createDocx({ id: resolvedId, result: exportResult, quizTypeOverride: resolvedSkill });
+      if (isListening) {
+        const title = String(exportResult?.data?.title || `quiz-${resolvedId}`).trim();
+        const zip = await buildListeningZip({ id: resolvedId, title, createDocx: docxCore.createDocx, result: exportResult, quizTypeOverride: resolvedSkill });
+        const fileName = `${buildListeningBaseName(resolvedId, title)}.zip`;
+
+        send(response, 200, zip, 'application/zip', {
+          'Content-Disposition': `attachment; filename="${fileName}"`,
+          'Content-Length': zip.length
+        });
+        return true;
+      }
       const fileName = `e-learning-${resolvedId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
 
       send(response, 200, docx, contentTypes.docx, {

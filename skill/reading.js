@@ -1,5 +1,5 @@
 import { decodeHtmlEntities, htmlToText, htmlToTextWithBlankPlaceholders, htmlWithBlankPlaceholders, splitTextLines } from './helper.js';
-import { normalizeExplanationHtml, resolveEffectiveQuizType } from './common.js';
+import { escapeHtml, normalizeExplanationHtml, resolveEffectiveQuizType } from './common.js';
 import { QUIZ_TYPE_LABELS, QUIZ_TYPE_KEYS, resolveQuizType } from '../quiz-types.js';
 
 function collectHtmlContent(value, htmlToText) {
@@ -1427,6 +1427,13 @@ export function getPartQuestions(part) {
     const questionStartOrder = (questionSet.questions || [])
       .map((item) => Number(item?.order))
       .find((value) => Number.isFinite(value) && value > 0) || 1;
+    const locateInfoSource = questionSet.locate_info;
+    const resolvedLocateInfo = Array.isArray(locateInfoSource)
+      ? (locateInfoSource[index]?.questions?.[0]?.locate_info
+        || locateInfoSource[index]?.locate_info
+        || locateInfoSource[index]
+        || null)
+      : (question.locate_info || locateInfoSource || null);
     const sharedQuestionContent = numberGapPlaceholdersInHtml(
       collectHtmlContent(questionSet.content),
       questionStartOrder
@@ -1442,7 +1449,8 @@ export function getPartQuestions(part) {
       shared_question_content: index === 0 ? sharedQuestionContent : '',
       shared_question_group_key: sharedQuestionGroupKey,
       shared_options: Array.isArray(questionSet.options) && questionSet.options.length > 0 ? questionSet.options : null,
-      shared_option_group_key: sharedQuestionGroupKey
+      shared_option_group_key: sharedQuestionGroupKey,
+      locate_info: resolvedLocateInfo
     };
   };
 
@@ -1516,12 +1524,14 @@ export function getPartQuestions(part) {
   return normalizedQuestions;
 }
 
-export function createReadingCore() {
+export function createReadingCore(deps = {}) {
+  const { buildPassageBlocks } = deps;
   function formatYouPassResult(result, quizTypeOverride) {
     const data = result?.data ?? result;
     const parts = extractYouPassParts(data);
     const quizTypeKey = resolveQuizType(resolveEffectiveQuizType(quizTypeOverride, data?.quiz_type)).key;
     const useReadingExplanation = quizTypeKey === 'reading';
+    const buildQuestionInfoText = typeof deps.buildQuestionInfoText === 'function' ? deps.buildQuestionInfoText : null;
     const lines = [];
 
     lines.push({ type: 'readingTestTitle', text: 'Test 1' });
@@ -1539,7 +1549,15 @@ export function createReadingCore() {
       lines.push({ type: 'passageLabel', text: `PASSAGE ${passageNumber}` });
 
       const passage = splitPassageContent(part, data);
-      if (passage.title || passage.bodyLines.length > 0) {
+      const passageBlocks = typeof buildPassageBlocks === 'function'
+        ? buildPassageBlocks(part, data, quizTypeKey)
+        : [];
+      if (passageBlocks.length > 0) {
+        if (passage.title) {
+          lines.push({ type: 'passageTitle', text: passage.title });
+        }
+        lines.push({ type: 'passageListeningTable', blocks: passageBlocks });
+      } else if (passage.title || passage.bodyLines.length > 0) {
         if (passage.title) {
           lines.push({ type: 'passageTitle', text: passage.title });
         }
@@ -1559,6 +1577,15 @@ export function createReadingCore() {
         const explanationsByOrder = buildExplanationMap(partQuestions);
         const questionGroupMetaByKey = new Map();
         const summaryCompletionAnswerMapByGroupKey = new Map();
+        const questionInfoTextFor = (question, rowIndex = 0) => (
+          buildQuestionInfoText ? buildQuestionInfoText(question, { part, data, quizTypeKey }, rowIndex) : ''
+        );
+        const withQuestionInfo = (payload, question, rowIndex = 0) => {
+          const questionInfoText = questionInfoTextFor(question, rowIndex);
+          return questionInfoText
+            ? { ...payload, questionInfoText }
+            : payload;
+        };
 
         const registerSummaryAnswer = (groupKey, question) => {
           const normalizedGroupKey = String(groupKey || '').trim();
@@ -1624,11 +1651,17 @@ export function createReadingCore() {
           const questionGroupDescription = String(questionGroupMeta.description || '').trim();
           const questionGroupContent = String(questionGroupMeta.content || '').trim();
           const questionGroupRawTypeKey = String(questionGroupMeta.rawTypeKey || '').trim();
+          const currentRawTypeKey = getQuestionRawTypeKey(question);
+          const multipleChoiceManyOptions = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+            ? formatMultipleChoiceManyOptions(question)
+            : [];
 
           if (questionGroupKey && questionGroupTitle && !emittedSharedQuestionGroups.has(questionGroupKey)) {
             lines.push({
               type: 'questionGroup',
-              text: `${questionGroupTitle.replaceAll(/:\s*$/g, '')}:`
+              text: `${questionGroupTitle.replaceAll(/:\s*$/g, '')}:`,
+              rawTypeKey: currentRawTypeKey,
+              questionOrder: String(question.order || '').trim()
             });
             emittedSharedQuestionGroups.add(questionGroupKey);
           }
@@ -1642,9 +1675,8 @@ export function createReadingCore() {
             emittedSharedQuestionDescriptions.add(questionGroupKey);
           }
 
-          const currentRawTypeKey = getQuestionRawTypeKey(question);
           const sharedQuestionContentKey = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
-            ? `${questionGroupKey}:${String(question.order || '').trim()}`
+            ? questionGroupKey
             : questionGroupKey;
 
           if (questionGroupKey && !emittedSharedQuestionContents.has(sharedQuestionContentKey)) {
@@ -1665,7 +1697,7 @@ export function createReadingCore() {
 
             if (currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_ENDINGS' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING' || currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
               const renderedOptionsHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
-                ? buildMultipleChoiceManyOptionsHtml([question])
+                ? ''
                 : buildMatchingFeatureOptionsHtml(matchingSharedQuestions);
               const renderedPromptHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
                 ? `<strong>${buildMultipleChoiceManyOrderRange(question)}</strong> ${buildMultipleChoiceManyPromptHtml([question])}`.trim()
@@ -1683,6 +1715,16 @@ export function createReadingCore() {
                   html: renderedOptionsHtml,
                   options: { size: '26', color: '2A5A78' }
                 });
+              }
+              if (currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+                labelIndexedOptions(multipleChoiceManyOptions)
+                  .forEach((option) => {
+                    lines.push({
+                      type: 'choice',
+                      text: formatOptionText(option),
+                      correct: option.correct
+                    });
+                  });
               }
             }
 
@@ -1705,6 +1747,7 @@ export function createReadingCore() {
             if (!emittedQuestionOrders.has(String(question.order))) {
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: `Question ${question.order}.`,
                 order: question.order,
                 rawTypeKey: 'MATCHING_INFO'
@@ -1738,7 +1781,8 @@ export function createReadingCore() {
                 ? `- [__${order}__]`
                 : formatGapQuestionLabel(answer.questionText, order, rawTypeKey);
 
-              lines.push({ type: 'questionTitle', text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
+              lines.push({ type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question), text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
               lines.push({ type: 'questionText', text: questionLabel });
               addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer }, useReadingExplanation);
               if (order) {
@@ -1762,9 +1806,6 @@ export function createReadingCore() {
           const singleChoiceOptions = normalizeTypeKey(question.question_type) === 'MULTIPLE_CHOICE_ONE'
             || normalizeTypeKey(question.type) === 'MULTIPLE_CHOICE_ONE'
             ? formatSingleChoiceRadio(question)
-            : [];
-          const multipleChoiceManyOptions = rawTypeKey === 'MULTIPLE_CHOICE_MANY'
-            ? formatMultipleChoiceManyOptions(question)
             : [];
           const sharedOptions = formatSharedOptions(question);
           const selectionOptions = (isMatchingFeatures || isMatchingHeadings)
@@ -1806,6 +1847,7 @@ export function createReadingCore() {
               if (!emittedQuestionOrders.has(String(question.order))) {
                 lines.push({
                   type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                   text: `Question ${question.order}.`,
                   order: question.order,
                   rawTypeKey
@@ -1827,6 +1869,7 @@ export function createReadingCore() {
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: `Question ${question.order}.`,
                 questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || '') : '',
                 order: question.order,
@@ -1887,6 +1930,7 @@ export function createReadingCore() {
 
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question, index),
                 text: resolvedOrder ? `Question ${resolvedOrder}` : 'Question',
                 questionText: '',
                 order: resolvedOrder,
@@ -1927,6 +1971,7 @@ export function createReadingCore() {
           if (rawTypeKey === 'SUMMARY_COMPLETION' && !emittedQuestionOrders.has(String(question.order))) {
             lines.push({
               type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
               text: `Question ${question.order}`,
               questionText: '',
               order: question.order,
@@ -1945,6 +1990,7 @@ export function createReadingCore() {
               const promptHtml = String(question.text || question.content || question.title || '').trim();
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: `Question ${question.order}`,
                 questionHtml: isMultipleChoiceOne ? promptHtml : '',
                 order: question.order,
@@ -1992,6 +2038,7 @@ export function createReadingCore() {
               const promptHtml = String(question.text || question.content || question.title || fallback || '').trim();
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: `Question ${question.order}`,
                 questionHtml: promptHtml,
                 order: question.order,
@@ -2025,6 +2072,7 @@ export function createReadingCore() {
               const questionTitleText = `Question ${question.order}`;
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: questionTitleText,
                 questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || `- [__${question.order}__]`) : '',
                 order: question.order,
@@ -2059,6 +2107,7 @@ export function createReadingCore() {
               const questionTitleText = `Question ${question.order}`;
               lines.push({
                 type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
                 text: questionTitleText,
                 questionHtml: String(question.text || question.content || question.title || fallback || '').trim(),
                 order: question.order,
@@ -2088,6 +2137,7 @@ export function createReadingCore() {
             const questionTitleText = `Question ${order}`;
             lines.push({
               type: 'questionTitle',
+                questionInfoText: questionInfoTextFor(question),
               text: order ? questionTitleText : 'Question',
               questionText: (isStatementQuestionType(rawTypeKey) || rawTypeKey === 'SUMMARY_COMPLETION') ? promptText : '',
               answerText: rawTypeKey === 'SUMMARY_COMPLETION' ? String(answer.answer || directAnswer || '').trim() : '',

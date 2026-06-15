@@ -163,7 +163,9 @@ export async function handleRequest(request, response) {
         types: getFormFieldValue(body, form, 'types'),
         quiz_types: getFormFieldValue(body, form, 'quiz_types'),
         writing_task_type: getFormFieldValue(body, form, 'writing_task_type'),
-        submitted_status: getFormFieldValue(body, form, 'submitted_status')
+        submitted_status: getFormFieldValue(body, form, 'submitted_status'),
+        create_folders: getFormFieldValue(body, form, 'create_folders'),
+        no_audio: getFormFieldValue(body, form, 'no_audio')
       };
       const token = getFormFieldValue(body, form, 'token');
 

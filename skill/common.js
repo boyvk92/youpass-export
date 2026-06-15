@@ -55,6 +55,65 @@ export function passageParagraph(text) {
   return styledParagraph(text, { size: '26', before: '80', after: '80' });
 }
 
+function buildListeningParagraph(text, options = {}) {
+  const { bold = false, indentLeft = '', before = '0', after = '0' } = options;
+  const indentXml = indentLeft !== '' ? `<w:ind w:left="${indentLeft}"/>` : '';
+  return `<w:p><w:pPr><w:spacing w:before="${before}" w:after="${after}"/>${indentXml}</w:pPr><w:r><w:rPr>${bold ? '<w:b/>' : ''}<w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+export function passageListeningTable(blocks = []) {
+  const rows = Array.isArray(blocks) ? blocks : [];
+  if (rows.length === 0) {
+    return '';
+  }
+
+  const speakerWidth = 2300;
+  const contentWidth = 6900;
+
+  const rowXml = rows.map((block) => {
+    const speaker = String(block?.speaker || '').trim().replace(/:\s*$/, '');
+    const lines = Array.isArray(block?.lines) ? block.lines : [];
+    const speakerCell = buildListeningParagraph(speaker, { bold: true });
+    const contentCell = lines.length > 0
+      ? lines.map((line, index) => buildListeningParagraph(String(line || '').trim(), {
+        indentLeft: index === 0 ? '' : '0',
+        after: '0'
+      })).join('')
+      : buildListeningParagraph('', {});
+
+    return `<w:tr>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="${speakerWidth}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>
+        ${speakerCell}
+      </w:tc>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="${contentWidth}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>
+        ${contentCell}
+      </w:tc>
+    </w:tr>`;
+  }).join('');
+
+  return `<w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="5000" w:type="pct"/>
+      <w:tblLayout w:type="fixed"/>
+      <w:tblBorders>
+        <w:top w:val="nil"/>
+        <w:left w:val="nil"/>
+        <w:bottom w:val="nil"/>
+        <w:right w:val="nil"/>
+        <w:insideH w:val="nil"/>
+        <w:insideV w:val="nil"/>
+      </w:tblBorders>
+    </w:tblPr>
+    <w:tblGrid>
+      <w:gridCol w:w="${speakerWidth}"/>
+      <w:gridCol w:w="${contentWidth}"/>
+    </w:tblGrid>
+    ${rowXml}
+  </w:tbl>`;
+}
+
 export function coverTitleParagraph(text) {
   return styledParagraph(text, { align: 'center', bold: true, size: '64', before: '180', after: '200' });
 }
@@ -111,11 +170,13 @@ export function answerParagraph(text) {
 export function choiceParagraph(line) {
   const shading = line.correct ? '<w:shd w:fill="00FFFF"/>' : '';
   const bold = line.correct ? '<w:b/>' : '';
-  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/><w:ind w:left="720"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/><w:ind w:left="720"/>${shading}</w:pPr><w:r><w:rPr>${bold}<w:color w:val="2A5A78"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(line.text)}</w:t></w:r></w:p>`;
 }
 
 export function questionInfoParagraph(text) {
-  return styledParagraph(text, { color: '555555', size: '22', before: '20', after: '20', indentLeft: '720' });
+  const value = String(text ?? '').trim();
+  const content = value ? `<w:r><w:br/></w:r><w:r><w:rPr><w:color w:val="555555"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r>` : '';
+  return `<w:p><w:pPr><w:spacing w:before="20" w:after="20"/><w:ind w:left="720"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="555555"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">Vị trí:</w:t></w:r>${content}</w:p>`;
 }
 
 export function heading(text) {
@@ -1494,19 +1555,20 @@ export function createDocxCore(deps) {
         }
 
         if (line.type === 'questionTitle') {
+          const questionInfoXml = line.questionInfoText ? questionInfoParagraph(line.questionInfoText) : '';
           if (line.questionHtml) {
-            return questionTitleWithHtml(line.text, line.questionHtml, '. ', { size: '26', imageRegistry });
+            return `${questionTitleWithHtml(line.text, line.questionHtml, '. ', { size: '26', imageRegistry })}${questionInfoXml}`;
           }
           if (line.rawTypeKey === 'MATCHING_ENDINGS' && line.answerText) {
-            return questionTitleWithTrailingAnswer(line.text, line.questionText || '', line.answerText, '. ');
+            return `${questionTitleWithTrailingAnswer(line.text, line.questionText || '', line.answerText, '. ')}${questionInfoXml}`;
           }
           if (line.answerText) {
-            return questionTitleWithAnswer(line.text, line.questionText || '', line.answerText, '. ', ' -> ');
+            return `${questionTitleWithAnswer(line.text, line.questionText || '', line.answerText, '. ', ' -> ')}${questionInfoXml}`;
           }
           if (line.questionText) {
-            return questionTitleWithText(line.text, line.questionText, '. ');
+            return `${questionTitleWithText(line.text, line.questionText, '. ')}${questionInfoXml}`;
           }
-          return questionTitle(line.text);
+          return `${questionTitle(line.text)}${questionInfoXml}`;
         }
 
         if (line.type === 'questionText') {
@@ -1531,6 +1593,10 @@ export function createDocxCore(deps) {
 
         if (line.type === 'passageText') {
           return passageParagraph(line.text);
+        }
+
+        if (line.type === 'passageListeningTable') {
+          return passageListeningTable(line.blocks);
         }
 
         if (line.type === 'questionGapHtml') {

@@ -50,6 +50,50 @@ export async function fetchELearningResult({ apiUrl, id, token }) {
   return response.text();
 }
 
+export function buildCmsAssetUrl(assetId) {
+  const id = String(assetId ?? '').trim();
+  return id ? `https://cms.youpass.vn/assets/${encodeURIComponent(id)}` : '';
+}
+
+export function guessExtensionFromMimeType(mimeType = '', fallback = 'bin') {
+  const value = String(mimeType || '').toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+
+  if (value.includes('image/png')) return 'png';
+  if (value.includes('image/jpeg') || value.includes('image/jpg')) return 'jpg';
+  if (value.includes('image/gif')) return 'gif';
+  if (value.includes('image/webp')) return 'webp';
+  if (value.includes('audio/mpeg') || value.includes('audio/mp3')) return 'mp3';
+  if (value.includes('audio/mp4') || value.includes('audio/m4a')) return 'm4a';
+  if (value.includes('audio/wav') || value.includes('audio/x-wav')) return 'wav';
+  if (value.includes('audio/ogg')) return 'ogg';
+  if (value.includes('audio/aac')) return 'aac';
+  if (value.includes('application/pdf')) return 'pdf';
+  return fallback;
+}
+
+export async function fetchBinaryAsset(assetUrl) {
+  const url = String(assetUrl ?? '').trim();
+  if (!url) {
+    return null;
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return {
+    buffer,
+    contentType,
+    ext: guessExtensionFromMimeType(contentType)
+  };
+}
+
 function ensureLogDir(filePath) {
   const directory = String(filePath || '').split('/').slice(0, -1).join('/');
   if (!directory) {

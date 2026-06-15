@@ -105,6 +105,18 @@ export function renderForm(error = '') {
     <p style="margin:16px 0 0;"><a href="/bulk">Xuất nhiều file ZIP</a></p>
   </main>
   <script>
+    const skillSelect = document.getElementById('skill');
+    const submitButton = document.querySelector('button[type="submit"]');
+    const updateSubmitLabel = () => {
+      if (!skillSelect || !submitButton) return;
+      submitButton.textContent = skillSelect.value === 'listening' ? 'Xuat file ZIP' : 'Xuat file DOCX';
+      submitButton.dataset.busyText = skillSelect.value === 'listening' ? 'Dang xuat ZIP...' : 'Dang xuat DOCX...';
+    };
+    if (skillSelect) {
+      skillSelect.addEventListener('change', updateSubmitLabel);
+      updateSubmitLabel();
+    }
+
     const filenameFromDisposition = (headerValue, fallback) => {
       const value = String(headerValue || '');
       const utf8Match = value.match(/filename\\*=UTF-8''([^;]+)/i);
@@ -321,6 +333,16 @@ export function renderBulkForm(error = '') {
 
       <label for="token">Token</label>
       <input id="token" name="token" type="text" autocomplete="off" required>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:16px;font-weight:700;">
+        <input type="checkbox" name="create_folders" value="1" style="width:auto;height:auto;margin:0;">
+        Tạo folder theo title
+      </label>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:700;">
+        <input type="checkbox" name="no_audio" value="1" style="width:auto;height:auto;margin:0;">
+        Không xuất file audio
+      </label>
 
       <button type="submit" data-busy-text="Dang xuat ZIP...">Xuat ZIP</button>
     </form>
