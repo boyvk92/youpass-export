@@ -108,6 +108,43 @@ export function buildListeningPassageBlocks(vocabs) {
   return blocks;
 }
 
+function normalizeListeningVocabEntry(node, fallbackMeta = {}) {
+  const meta = node && typeof node === 'object' ? node.meta || fallbackMeta : fallbackMeta;
+  return {
+    from: String(meta?.from ?? '').trim(),
+    to: String(meta?.to ?? '').trim(),
+    value: String(node?.value ?? node?.text ?? node?.content ?? node?.html ?? node ?? '').trim()
+  };
+}
+
+export function buildListeningVocabJsonEntries(vocabs) {
+  if (!Array.isArray(vocabs) || vocabs.length === 0) {
+    return [];
+  }
+
+  const entries = [];
+
+  vocabs.forEach((item) => {
+    if (!item) {
+      return;
+    }
+
+    const fallbackMeta = item?.meta || {};
+    const children = getListeningChildren(item);
+
+    if (children.length === 0) {
+      entries.push(normalizeListeningVocabEntry(item, fallbackMeta));
+      return;
+    }
+
+    children.forEach((child) => {
+      entries.push(normalizeListeningVocabEntry(child, fallbackMeta));
+    });
+  });
+
+  return entries;
+}
+
 function buildListeningTranscriptSegments(vocabs) {
   if (!Array.isArray(vocabs) || vocabs.length === 0) {
     return [];

@@ -109,8 +109,9 @@ export function renderForm(error = '') {
     const submitButton = document.querySelector('button[type="submit"]');
     const updateSubmitLabel = () => {
       if (!skillSelect || !submitButton) return;
-      submitButton.textContent = skillSelect.value === 'listening' ? 'Xuat file ZIP' : 'Xuat file DOCX';
-      submitButton.dataset.busyText = skillSelect.value === 'listening' ? 'Dang xuat ZIP...' : 'Dang xuat DOCX...';
+      const useZip = skillSelect.value === 'listening' || skillSelect.value === 'speaking';
+      submitButton.textContent = useZip ? 'Xuat file ZIP' : 'Xuat file DOCX';
+      submitButton.dataset.busyText = useZip ? 'Dang xuat ZIP...' : 'Dang xuat DOCX...';
     };
     if (skillSelect) {
       skillSelect.addEventListener('change', updateSubmitLabel);
@@ -338,11 +339,13 @@ export function renderBulkForm(error = '') {
         <input type="checkbox" name="create_folders" value="1" style="width:auto;height:auto;margin:0;">
         Tạo folder theo title
       </label>
+      <p class="hint" style="margin-top:6px;">Speaking sẽ tạo folder theo title và chia DOCX theo từng pass.</p>
 
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:700;">
         <input type="checkbox" name="no_audio" value="1" style="width:auto;height:auto;margin:0;">
         Không xuất file audio
       </label>
+      <p class="hint" style="margin-top:6px;">Áp dụng cho Listening và Speaking.</p>
 
       <button type="submit" data-busy-text="Dang xuat ZIP...">Xuat ZIP</button>
     </form>

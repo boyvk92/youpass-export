@@ -1,8 +1,9 @@
 import { buildCoverPageLines } from '../cover-page.js';
 import { createDocxCore, buildImageRegistry, coverTitleParagraph, coverSubjectParagraph, coverCodeParagraph, pageBreakParagraph, heading, questionGroup, questionDescriptionHtml, questionTitle, questionTextParagraph, questionAnswerParagraph, questionTitleWithAnswer, questionTitleWithAnswerOnly, questionTitleWithTrailingAnswer, questionTitleWithHtml, readingTestTitle, passageLabel, passageTitle, passageParagraph, extractImageOnlyHtml, htmlToDocxParagraphs, questionKeywordsBlock, questionExplanationBlock, answerParagraph, choiceParagraph, questionInfoParagraph, paragraph, formatResult, appendDocxRenderLog, appendQuestionTypeLog, summarizeQuestionTypes, summarizeUnknownQuestionTypes, createZip } from '../skill/common.js';
 import { createReadingCore, extractYouPassParts, splitPassageContent, getPartQuestions, isFillInTheBlankQuestion, getQuestionRawTypeKey, extractMarkedAnswers, pushQuestionGroupLines, addExplanationLines, getChoiceAnswer, getDirectAnswer, formatOptionText, labelIndexedOptions, pushSharedOptions, formatAreaOfInformation, extractQuestionKeywords, getQuestionTypeLabel, getQuestionRawTypeText, normalizeTypeKey, formatSingleChoiceRadio, formatMultipleChoiceManyOptions, formatSelectionQuestion, formatChoiceOptions, formatSharedOptions, getQuestionOrderRange, collectQuestionAnswerTokens, collectQuestionChoiceTextMap, collectGroupChoiceTextMap, buildExplanationMap } from '../skill/reading.js';
-import { buildListeningPassageBlocks, buildListeningQuestionInfoText, normalizeListeningExportResult } from '../skill/listening.js';
-import { buildCmsAssetUrl, fetchBinaryAsset, fetchELearningResult, resetTextLogFile, appendJsonLogLine, sanitizeFileNamePart, normalizeSkillValue } from './helper.js';
+import { buildListeningPassageBlocks, buildListeningQuestionInfoText, buildListeningVocabJsonEntries, normalizeListeningExportResult } from '../skill/listening.js';
+import { buildSpeakingZipFiles } from './speaking-export.js';
+import { buildCmsAssetUrl, fetchBinaryAsset, fetchELearningResult, resetTextLogFile, appendJsonLogLine, sanitizeFileNamePart, normalizeSkillValue, resolveSkillApiUrl } from './helper.js';
 
 function extractQuizInfo(source) {
   const value = String(source ?? '').trim();
@@ -81,6 +82,11 @@ async function buildListeningZip({ id, title, createDocx, result, quizTypeOverri
       data: docx
     });
 
+    files.push({
+      name: `${passFolder}/Pass ${partIndex + 1}.json`,
+      data: Buffer.from(JSON.stringify(buildListeningVocabJsonEntries(part?.vocabs), null, 2), 'utf8')
+    });
+
     if (audioAsset?.buffer) {
       files.push({
         name: `${passFolder}/Pass ${partIndex + 1}.${audioExt}`,
@@ -90,6 +96,18 @@ async function buildListeningZip({ id, title, createDocx, result, quizTypeOverri
   }
 
   return createZip(files);
+}
+
+async function buildSpeakingZip({ id, title, createDocx, result, quizTypeOverride }) {
+  return createZip(await buildSpeakingZipFiles({
+    id,
+    title,
+    createDocx,
+    result,
+    quizTypeOverride,
+    folderPrefix: title,
+    nestPassFolders: true
+  }));
 }
 
 export function createExportDocsCore(deps) {
@@ -210,10 +228,10 @@ export function createExportDocsCore(deps) {
       resetTextLogFile(unknownQuestionTypesLogFile, enableFileLogs);
 
       const isListening = normalizeSkillValue(resolvedSkill) === 'listening';
-      const result = await fetchELearningResult({ apiUrl, id: resolvedId, token });
+      const isSpeaking = normalizeSkillValue(resolvedSkill) === 'speaking';
+      const result = await fetchELearningResult({ apiUrl: resolveSkillApiUrl(apiUrl, resolvedSkill), id: resolvedId, token });
       const exportResult = isListening ? normalizeListeningExportResult(result) : result;
       appendJsonLogLine(readingCore.buildCleanExportRecord({ id: resolvedId, result: exportResult, quizTypeOverride: resolvedSkill }), exportLogFile, enableFileLogs);
-      const docx = await docxCore.createDocx({ id: resolvedId, result: exportResult, quizTypeOverride: resolvedSkill });
       if (isListening) {
         const title = String(exportResult?.data?.title || `quiz-${resolvedId}`).trim();
         const zip = await buildListeningZip({ id: resolvedId, title, createDocx: docxCore.createDocx, result: exportResult, quizTypeOverride: resolvedSkill });
@@ -225,6 +243,24 @@ export function createExportDocsCore(deps) {
         });
         return true;
       }
+      if (isSpeaking) {
+        const title = String(exportResult?.data?.title || `quiz-${resolvedId}`).trim();
+        const zip = await buildSpeakingZip({
+          id: resolvedId,
+          title,
+          createDocx: docxCore.createDocx,
+          result: exportResult,
+          quizTypeOverride: resolvedSkill
+        });
+        const fileName = `${sanitizeFileNamePart(`${resolvedId} - ${title}`) || `quiz-${resolvedId}`}.zip`;
+
+        send(response, 200, zip, 'application/zip', {
+          'Content-Disposition': `attachment; filename="${fileName}"`,
+          'Content-Length': zip.length
+        });
+        return true;
+      }
+      const docx = await docxCore.createDocx({ id: resolvedId, result: exportResult, quizTypeOverride: resolvedSkill });
       const fileName = `e-learning-${resolvedId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}.docx`;
 
       send(response, 200, docx, contentTypes.docx, {

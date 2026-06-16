@@ -15,9 +15,11 @@ import {
   getBulkApiConfig,
   normalizeSkillValue,
   normalizeAuthorizationToken,
-  sanitizeFileNamePart
+  sanitizeFileNamePart,
+  resolveSkillApiUrl
 } from './helper.js';
-import { normalizeListeningExportResult } from '../skill/listening.js';
+import { buildListeningVocabJsonEntries, normalizeListeningExportResult } from '../skill/listening.js';
+import { buildSpeakingZipFiles } from './speaking-export.js';
 
 function buildBulkFolderPath(title = '') {
   const segments = String(title ?? '')
@@ -85,6 +87,7 @@ async function addListeningZipEntries(zip, { id, title, createDocx, result, quiz
     const folderPath = buildListeningPartFolderPath(titlePath, partIndex);
     const folder = zip.folder(folderPath);
     folder.file(`${baseName}.docx`, docx);
+    folder.file(`Pass ${partIndex + 1}.json`, Buffer.from(JSON.stringify(buildListeningVocabJsonEntries(part?.vocabs), null, 2), 'utf8'));
 
     if (!noAudio && fileId) {
       const audioAsset = await fetchBinaryAsset(buildCmsAssetUrl(fileId));
@@ -94,6 +97,13 @@ async function addListeningZipEntries(zip, { id, title, createDocx, result, quiz
       }
     }
   }
+}
+
+async function addSpeakingZipEntries(zip, { id, title, createDocx, result, quizTypeOverride, folderPrefix = '', nestPassFolders = true, noAudio = false }) {
+  const files = await buildSpeakingZipFiles({ id, title, createDocx, result, quizTypeOverride, folderPrefix, nestPassFolders, noAudio });
+  files.forEach((file) => {
+    zip.file(file.name, file.data);
+  });
 }
 
 export function createExportMultiCore(deps) {
@@ -113,6 +123,8 @@ export function createExportMultiCore(deps) {
     const createFolders = Boolean(fixedParams?.create_folders);
     const noAudio = Boolean(fixedParams?.no_audio);
     const isListening = normalizeSkillValue(skill) === 'listening';
+    const isSpeaking = normalizeSkillValue(skill) === 'speaking';
+    const skillApiUrl = resolveSkillApiUrl(apiUrl, skill);
     const JSZipClass = (await import('jszip')).default;
     const zip = new JSZipClass();
     const errors = [];
@@ -124,6 +136,13 @@ export function createExportMultiCore(deps) {
     const quizTypeOverride = normalizeSkillValue(skill);
     let total = null;
     let fetchedCount = 0;
+    const buildSpeakingFolderPrefix = (id, title) => {
+      if (!createFolders) {
+        return '';
+      }
+
+      return sanitizeFileNamePart(title) || sanitizeFileNamePart(`${id} - ${title}`) || `quiz-${id}`;
+    };
 
     resetTextLogFile(exportLogFile, enableFileLogs);
     resetTextLogFile(renderLogFile, enableFileLogs);
@@ -173,17 +192,34 @@ export function createExportMultiCore(deps) {
               }
 
               seenIds.add(exportId);
-              const result = await fetchELearningResult({ apiUrl, id: exportId, token });
+              const result = await fetchELearningResult({ apiUrl: skillApiUrl, id: exportId, token });
               const exportResult = isListening ? normalizeListeningExportResult(result) : result;
               const title = htmlToText(exportResult?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
+              if (isSpeaking) {
+                if (typeof buildCleanExportRecord === 'function') {
+                  appendJsonLogLine(buildCleanExportRecord({ id: exportId, result, quizTypeOverride }), exportLogFile, enableFileLogs);
+                }
+                await addSpeakingZipEntries(zip, {
+                  id: exportId,
+                  title,
+                  createDocx,
+                  result,
+                  quizTypeOverride,
+                  folderPrefix: buildSpeakingFolderPrefix(exportId, title),
+                  nestPassFolders: true,
+                  noAudio
+                });
+                addedCount += 1;
+                continue;
+              }
               if (isListening) {
                 if (typeof buildCleanExportRecord === 'function') {
                   appendJsonLogLine(buildCleanExportRecord({ id: exportId, result: exportResult, quizTypeOverride }), exportLogFile, enableFileLogs);
                 }
-            await addListeningZipEntries(zip, { id: exportId, title, createDocx, result: exportResult, quizTypeOverride, noAudio });
-            addedCount += 1;
-            continue;
-          }
+                await addListeningZipEntries(zip, { id: exportId, title, createDocx, result: exportResult, quizTypeOverride, noAudio });
+                addedCount += 1;
+                continue;
+              }
 
               const folderPath = createFolders && normalizeSkillValue(skill) === 'reading'
                 ? buildBulkFolderPath(title)
@@ -236,9 +272,26 @@ export function createExportMultiCore(deps) {
         seenIds.add(id);
 
         try {
-          const result = await fetchELearningResult({ apiUrl, id, token });
+          const result = await fetchELearningResult({ apiUrl: skillApiUrl, id, token });
           const exportResult = isListening ? normalizeListeningExportResult(result) : result;
           const title = htmlToText(exportResult?.data?.title || item?.title || `quiz-${id}`);
+          if (isSpeaking) {
+            if (typeof buildCleanExportRecord === 'function') {
+              appendJsonLogLine(buildCleanExportRecord({ id, result, quizTypeOverride }), exportLogFile, enableFileLogs);
+            }
+            await addSpeakingZipEntries(zip, {
+              id,
+              title,
+              createDocx,
+              result,
+              quizTypeOverride,
+              folderPrefix: buildSpeakingFolderPrefix(id, title),
+              nestPassFolders: true,
+              noAudio
+            });
+            addedCount += 1;
+            continue;
+          }
           if (isListening) {
             if (typeof buildCleanExportRecord === 'function') {
               appendJsonLogLine(buildCleanExportRecord({ id, result: exportResult, quizTypeOverride }), exportLogFile, enableFileLogs);

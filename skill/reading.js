@@ -1,5 +1,6 @@
 import { decodeHtmlEntities, htmlToText, htmlToTextWithBlankPlaceholders, htmlWithBlankPlaceholders, splitTextLines } from './helper.js';
 import { escapeHtml, normalizeExplanationHtml, resolveEffectiveQuizType } from './common.js';
+import { buildSpeakingExportLines } from './speaking.js';
 import { QUIZ_TYPE_LABELS, QUIZ_TYPE_KEYS, resolveQuizType } from '../quiz-types.js';
 
 function collectHtmlContent(value, htmlToText) {
@@ -1530,6 +1531,9 @@ export function createReadingCore(deps = {}) {
     const data = result?.data ?? result;
     const parts = extractYouPassParts(data);
     const quizTypeKey = resolveQuizType(resolveEffectiveQuizType(quizTypeOverride, data?.quiz_type)).key;
+    if (quizTypeKey === 'speaking') {
+      return buildSpeakingExportLines(result);
+    }
     const useReadingExplanation = quizTypeKey === 'reading';
     const buildQuestionInfoText = typeof deps.buildQuestionInfoText === 'function' ? deps.buildQuestionInfoText : null;
     const lines = [];

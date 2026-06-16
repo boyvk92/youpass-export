@@ -39,7 +39,7 @@ export async function fetchELearningResult({ apiUrl, id, token }) {
   });
 
   if (!response.ok) {
-    throw new Error(`E-learning API tra ve HTTP ${response.status}`);
+    throw new Error(`E-learning API tra ve HTTP ${response.status}: ${response.url || url.toString()}`);
   }
 
   const contentType = response.headers.get('content-type') || '';
@@ -260,6 +260,15 @@ export function buildFixedBulkListUrl(params = {}, baseUrl = 'https://api.youpas
   return url.toString();
 }
 
+export function resolveSkillApiUrl(apiUrl, skill) {
+  const normalizedSkill = normalizeSkillValue(skill);
+  if (normalizedSkill === 'speaking') {
+    return 'https://api.youpass.vn/v1/mock-test/quizzes/id';
+  }
+
+  return String(apiUrl || '').trim();
+}
+
 export function buildMockTestDetailUrl(id) {
   return `https://api.youpass.vn/v1/mock-test/${encodeURIComponent(String(id ?? '').trim())}`;
 }
@@ -281,7 +290,7 @@ export async function fetchQuizList({ listUrl, token, normalizeAuthorizationToke
   });
 
   if (!response.ok) {
-    throw new Error(`Danh sach quiz tra ve HTTP ${response.status}`);
+    throw new Error(`Danh sach quiz tra ve HTTP ${response.status}: ${response.url || listUrl}`);
   }
 
   const contentType = response.headers.get('content-type') || '';
@@ -301,7 +310,7 @@ export async function fetchMockTestDetail({ id, token, normalizeAuthorizationTok
   });
 
   if (!response.ok) {
-    throw new Error(`Mock test detail tra ve HTTP ${response.status}`);
+    throw new Error(`Mock test detail tra ve HTTP ${response.status}: ${response.url || buildMockTestDetailUrl(id)}`);
   }
 
   const contentType = response.headers.get('content-type') || '';
