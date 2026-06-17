@@ -284,6 +284,31 @@ function buildMatchingFeatureOptionsHtml(questions = []) {
     : '';
 }
 
+function buildMatchingHeadingOptionsHtml(questions = []) {
+  const options = [];
+  const seen = new Set();
+
+  questions.forEach((question) => {
+    const sharedOptions = formatSharedOptions(question);
+    const selectionOptions = formatSelectionOptions(question);
+    const sourceOptions = sharedOptions.length > 0 ? sharedOptions : selectionOptions;
+
+    sourceOptions.forEach((option) => {
+      const text = String(formatOptionText(option) || '').trim();
+      const signature = text;
+
+      if (signature && !seen.has(signature)) {
+        seen.add(signature);
+        options.push(text);
+      }
+    });
+  });
+
+  return options.length > 0
+    ? options.map((optionText) => `<p>${optionText}</p>`).join('')
+    : '';
+}
+
 function buildMultipleChoiceManyOptionsHtml(questions = []) {
   const options = [];
   const seen = new Set();
@@ -1725,7 +1750,9 @@ export function createReadingCore(deps = {}) {
             if (currentRawTypeKey === 'MATCHING_FEATURES' || currentRawTypeKey === 'MATCHING_ENDINGS' || currentRawTypeKey === 'MATCHING_HEADINGS' || currentRawTypeKey === 'MATCHING_HEADING' || currentRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
               const renderedOptionsHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
                 ? ''
-                : buildMatchingFeatureOptionsHtml(matchingSharedQuestions);
+                : (currentRawTypeKey === 'MATCHING_HEADING'
+                  ? buildMatchingHeadingOptionsHtml(matchingSharedQuestions)
+                  : buildMatchingFeatureOptionsHtml(matchingSharedQuestions));
               const renderedPromptHtml = currentRawTypeKey === 'MULTIPLE_CHOICE_MANY'
                 ? `<strong>${buildMultipleChoiceManyOrderRange(question)}</strong> ${buildMultipleChoiceManyPromptHtml([question])}`.trim()
                 : '';
@@ -1845,6 +1872,12 @@ export function createReadingCore(deps = {}) {
           const matchingFeatureGroupKey = isSharedOptionGroup
             ? String(question.shared_option_group_key || question.shared_question_group_key || question.question_set_id || question.group?.id || question.group?.type || question.order || '').trim()
             : '';
+          const matchingSharedQuestionsForAnswer = isSharedOptionGroup
+            ? partQuestions.filter((item) => String(item.shared_question_group_key || item.question_set_id || '').trim() === matchingFeatureGroupKey && getQuestionRawTypeKey(item) === rawTypeKey)
+            : [];
+          const matchingHeadingChoiceTextMap = isMatchingHeadings
+            ? buildMatchingFeatureChoiceTextMap(matchingSharedQuestionsForAnswer)
+            : new Map();
           const choiceOptions = singleChoiceOptions.length > 0
             ? singleChoiceOptions
             : (multipleChoiceManyOptions.length > 0
@@ -1853,6 +1886,9 @@ export function createReadingCore(deps = {}) {
                 ? matchingFeatureOptions
                 : (selectionOptions.length > 0 ? selectionOptions : formatChoiceOptions(question))));
           const choiceAnswer = getChoiceAnswer(question, choiceOptions);
+          const matchingHeadingAnswerText = isMatchingHeadings
+            ? resolveMatchingFeatureAnswerText(question, matchingHeadingChoiceTextMap)
+            : choiceAnswer;
           const directAnswer = getDirectAnswer(question);
           const statementChoiceOptions = isStatementQuestionType(rawTypeKey)
             ? buildStatementChoiceOptions(rawTypeKey, directAnswer || fallback)
@@ -1899,7 +1935,8 @@ export function createReadingCore(deps = {}) {
                 type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question),
                 text: `Question ${question.order}.`,
-                questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || '') : '',
+                questionText: isStatementQuestionType(rawTypeKey) ? (fallback || directAnswer || '') : (isMatchingHeadings ? fallback : ''),
+                answerText: isMatchingHeadings ? matchingHeadingAnswerText : '',
                 order: question.order,
                 rawTypeKey
               });
@@ -1907,7 +1944,7 @@ export function createReadingCore(deps = {}) {
                 lines.push({ type: 'questionText', text: fallback });
               }
               addExplanationLines(lines, question, question.order, explanationsByOrder, {
-                answer: choiceAnswer,
+                answer: matchingHeadingAnswerText,
                 questionText: fallback,
                 choices: renderedChoiceOptions.map((option) => ({
                   ...option,

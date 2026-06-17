@@ -20,6 +20,7 @@ import {
 } from './helper.js';
 import { buildListeningVocabJsonEntries, normalizeListeningExportResult } from '../skill/listening.js';
 import { buildSpeakingZipFiles } from './speaking-export.js';
+import { resolveQuizType } from '../quiz-types.js';
 
 function buildBulkFolderPath(title = '') {
   const segments = String(title ?? '')
@@ -106,6 +107,55 @@ async function addSpeakingZipEntries(zip, { id, title, createDocx, result, quizT
   });
 }
 
+async function addReadingZipEntries(zip, { id, title, createDocx, result, quizTypeOverride, createFolders, htmlToText }) {
+  const folderPath = createFolders ? buildBulkFolderPath(title) : '';
+  const readingParts = Array.isArray(result?.data?.parts) && result.data.parts.length > 0
+    ? result.data.parts
+    : [null];
+
+  let addedCount = 0;
+  for (let partIndex = 0; partIndex < readingParts.length; partIndex += 1) {
+    const part = readingParts[partIndex];
+    const partTitle = part ? htmlToText(part.title || part.question_group_title || part.passage_title || `Passage ${partIndex + 1}`) : '';
+    const resultForDoc = part
+      ? {
+        ...result,
+        data: {
+          ...result.data,
+          part: [part],
+          parts: [part]
+        }
+      }
+      : result;
+    const docx = await createDocx({ id, result: resultForDoc, quizTypeOverride });
+    const fileName = buildBulkDocxFileName({
+      id,
+      partTitle,
+      partIndex
+    });
+
+    if (folderPath) {
+      zip.folder(folderPath).file(fileName, docx);
+    } else {
+      zip.file(fileName, docx);
+    }
+    addedCount += 1;
+  }
+
+  return addedCount;
+}
+
+function extractMockTestListEntries(item) {
+  const mockTests = Array.isArray(item?.mock_tests) ? item.mock_tests : [];
+  return mockTests.length > 0 ? mockTests.map((mockTest) => ({
+    ...mockTest,
+    parentTitle: item?.title || ''
+  })) : [{
+    ...item,
+    parentTitle: ''
+  }];
+}
+
 export function createExportMultiCore(deps) {
   const {
     htmlToText,
@@ -124,15 +174,17 @@ export function createExportMultiCore(deps) {
     const noAudio = Boolean(fixedParams?.no_audio);
     const isListening = normalizeSkillValue(skill) === 'listening';
     const isSpeaking = normalizeSkillValue(skill) === 'speaking';
+    const isReading = normalizeSkillValue(skill) === 'reading';
     const skillApiUrl = resolveSkillApiUrl(apiUrl, skill);
     const JSZipClass = (await import('jszip')).default;
     const zip = new JSZipClass();
     const errors = [];
     const seenIds = new Set();
     let addedCount = 0;
-    let currentPage = 1;
-    const safePageSize = 20;
     const apiConfig = getBulkApiConfig(skill);
+    const configuredPage = Number(fixedParams?.page || apiConfig.params?.page || 1);
+    const configuredPageSize = String(fixedParams?.page_size || apiConfig.params?.page_size || 20);
+    let currentPage = Number.isFinite(configuredPage) && configuredPage > 0 ? configuredPage : 1;
     const quizTypeOverride = normalizeSkillValue(skill);
     let total = null;
     let fetchedCount = 0;
@@ -153,7 +205,7 @@ export function createExportMultiCore(deps) {
       const listUrl = buildFixedBulkListUrl({
         ...apiConfig.params,
         ...fixedParams,
-        page_size: safePageSize,
+        page_size: configuredPageSize,
         page: currentPage
       }, apiConfig.baseUrl, apiConfig.allowedKeys);
 
@@ -170,6 +222,60 @@ export function createExportMultiCore(deps) {
 
       for (const item of items) {
         const isWriting = normalizeSkillValue(skill) === 'writing';
+        if (isReading || isListening) {
+          const mockTestEntries = extractMockTestListEntries(item);
+          for (const mockTestEntry of mockTestEntries) {
+            const seedId = String(mockTestEntry?.id ?? '').trim();
+            if (!seedId) {
+              errors.push(`${item?.title || 'mock-test item'}: khong co mock_tests[].id`);
+              continue;
+            }
+
+            try {
+              const detailResult = await fetchMockTestDetail({ id: seedId, token, normalizeAuthorizationToken });
+              const finalId = extractMockTestFinalId(detailResult);
+              const exportId = String(finalId || '').trim();
+              if (!exportId) {
+                errors.push(`${seedId}: khong tim thay data.quizzes.full.id`);
+                continue;
+              }
+
+              if (seenIds.has(exportId)) {
+                continue;
+              }
+
+              seenIds.add(exportId);
+              const result = await fetchELearningResult({ apiUrl: skillApiUrl, id: exportId, token });
+
+              const fallbackTitle = [mockTestEntry?.parentTitle, mockTestEntry?.title]
+                .filter(Boolean)
+                .join(' - ');
+              const title = htmlToText(result?.data?.title || fallbackTitle || `quiz-${exportId}`);
+              if (typeof buildCleanExportRecord === 'function') {
+                appendJsonLogLine(buildCleanExportRecord({ id: exportId, result: isListening ? normalizeListeningExportResult(result) : result, quizTypeOverride }), exportLogFile, enableFileLogs);
+              }
+              if (isListening) {
+                const exportResult = normalizeListeningExportResult(result);
+                await addListeningZipEntries(zip, { id: exportId, title, createDocx, result: exportResult, quizTypeOverride, noAudio });
+                addedCount += 1;
+              } else {
+                addedCount += await addReadingZipEntries(zip, {
+                  id: exportId,
+                  title,
+                  createDocx,
+                  result,
+                  quizTypeOverride,
+                  createFolders,
+                  htmlToText
+                });
+              }
+            } catch (error) {
+              errors.push(`${seedId}: ${error.message}`);
+            }
+          }
+          continue;
+        }
+
         if (!isWriting) {
           const entries = extractMockTestEntries(item, skill);
           for (const entry of entries) {
@@ -194,6 +300,11 @@ export function createExportMultiCore(deps) {
               seenIds.add(exportId);
               const result = await fetchELearningResult({ apiUrl: skillApiUrl, id: exportId, token });
               const exportResult = isListening ? normalizeListeningExportResult(result) : result;
+              const resultSkillKey = resolveQuizType(exportResult?.data?.quiz_type).key;
+              if (resultSkillKey && resultSkillKey !== quizTypeOverride) {
+                errors.push(`${exportId}: bo qua quiz_type=${resultSkillKey}`);
+                continue;
+              }
               const title = htmlToText(exportResult?.data?.title || entry?.title || item?.title || `quiz-${exportId}`);
               if (isSpeaking) {
                 if (typeof buildCleanExportRecord === 'function') {
@@ -274,6 +385,11 @@ export function createExportMultiCore(deps) {
         try {
           const result = await fetchELearningResult({ apiUrl: skillApiUrl, id, token });
           const exportResult = isListening ? normalizeListeningExportResult(result) : result;
+          const resultSkillKey = resolveQuizType(exportResult?.data?.quiz_type).key;
+          if (resultSkillKey && resultSkillKey !== quizTypeOverride) {
+            errors.push(`${id}: bo qua quiz_type=${resultSkillKey}`);
+            continue;
+          }
           const title = htmlToText(exportResult?.data?.title || item?.title || `quiz-${id}`);
           if (isSpeaking) {
             if (typeof buildCleanExportRecord === 'function') {
@@ -352,7 +468,10 @@ export function createExportMultiCore(deps) {
     }
 
     if (addedCount === 0) {
-      throw new Error('Khong tao duoc file DOCX nao tu danh sach quiz');
+      const detailMessage = errors.length > 0
+        ? `; loi dau tien: ${errors.slice(0, 3).join(' | ')}`
+        : '';
+      throw new Error(`Khong tao duoc file DOCX nao tu danh sach quiz${detailMessage}`);
     }
 
     if (errors.length > 0) {

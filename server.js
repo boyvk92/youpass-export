@@ -46,6 +46,7 @@ const exportDocsCore = createExportDocsCore({
 });
 
 const exportMultiCore = createExportMultiCore({
+  htmlToText,
   createDocx: exportDocsCore.createDocx,
   buildCleanExportRecord: exportDocsCore.buildCleanExportRecord,
   apiUrl: API_URL,
@@ -168,6 +169,10 @@ export async function handleRequest(request, response) {
       const form = parseFormBody(request, body);
       const skill = getFormFieldValue(body, form, 'skill');
       const fixedParams = {
+        page_size: getFormFieldValue(body, form, 'page_size'),
+        page: getFormFieldValue(body, form, 'page'),
+        skill_id: getFormFieldValue(body, form, 'skill_id'),
+        sort: getFormFieldValue(body, form, 'sort'),
         types: getFormFieldValue(body, form, 'types'),
         quiz_types: getFormFieldValue(body, form, 'quiz_types'),
         writing_task_type: getFormFieldValue(body, form, 'writing_task_type'),

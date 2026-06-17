@@ -318,7 +318,7 @@ export function renderBulkForm(error = '') {
 <body>
   <main>
     <h1>Xuất nhiều file ZIP</h1>
-    <p class="hint">Nhập các tham số query. API danh sách được cố định ở https://api.youpass.vn/v1/quizzes.</p>
+    <p class="hint">Reading dùng danh sách https://api.youpass.vn/v1/mock-test, sau đó lấy chi tiết bằng https://api.youpass.vn/v1/mock-test/{id}.</p>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <form method="post" action="/export-bulk">
       <label for="skill">Kỹ năng</label>
@@ -329,10 +329,15 @@ export function renderBulkForm(error = '') {
         <option value="speaking">Speaking</option>
       </select>
 
-      <label for="types">types</label>
-      <input id="types" name="types" value="7" autocomplete="off" required>
+      <input type="hidden" id="page_size" name="page_size" value="4">
+      <input type="hidden" id="page" name="page" value="1">
+      <input type="hidden" id="skill_id" name="skill_id" value="1">
+      <input type="hidden" id="sort" name="sort" value="priority.desc">
 
       <div data-writing-only>
+        <label for="types">types</label>
+        <input id="types" name="types" value="7" autocomplete="off" required>
+
         <label for="quiz_types">quiz_types</label>
         <input id="quiz_types" name="quiz_types" value="3" autocomplete="off">
 
@@ -364,12 +369,25 @@ export function renderBulkForm(error = '') {
     <p style="margin:8px 0 0;"><a href="/test">Chế độ test</a></p>
   </main>
   <script>
-    const skillSelect = document.getElementById('skill');
-    const writingOnly = document.querySelector('[data-writing-only]');
-    const toggleWritingFields = () => {
+  const skillSelect = document.getElementById('skill');
+  const skillIdInput = document.getElementById('skill_id');
+  const writingOnly = document.querySelector('[data-writing-only]');
+  const skillIdMap = {
+    reading: '1',
+    listening: '2',
+    speaking: '8',
+    writing: ''
+  };
+  const syncBulkDefaults = () => {
+      if (skillSelect && skillIdInput) {
+        skillIdInput.value = skillIdMap[skillSelect.value] || '';
+      }
+  };
+  const toggleWritingFields = () => {
       if (!skillSelect || !writingOnly) return;
       writingOnly.style.display = skillSelect.value === 'writing' ? '' : 'none';
-    };
+      syncBulkDefaults();
+  };
     if (skillSelect) {
       skillSelect.addEventListener('change', toggleWritingFields);
       toggleWritingFields();

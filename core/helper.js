@@ -344,9 +344,11 @@ export function getBulkApiConfig(skill) {
 
   return {
     baseUrl: 'https://api.youpass.vn/v1/mock-test',
-    allowedKeys: ['page_size', 'page', 'skill_id'],
+    allowedKeys: ['page_size', 'page', 'skill_id', 'sort'],
     params: {
       skill_id: skillIdMap[normalizedSkill] || '1',
+      page_size: '4',
+      page: '1',
       sort: 'priority.desc'
     }
   };
