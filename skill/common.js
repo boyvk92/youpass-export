@@ -930,12 +930,12 @@ export function runXml(text, options = {}) {
 }
 
 export function explanationRuns(text) {
-  const stepMatch = String(text).match(/^(Bước\s+\d+\s*:)(.*)$/i);
+  const stepMatch = String(text).match(/^(Bước|Step)\s+(\d+\s*:)(.*)$/i);
 
   if (stepMatch) {
     return [
-      runXml(stepMatch[1], { bold: true, color: '444444', size: '22' }),
-      runXml(stepMatch[2], { color: '444444', size: '22' })
+      runXml(`Step ${stepMatch[2]}`, { bold: true, color: '444444', size: '22' }),
+      runXml(stepMatch[3], { color: '444444', size: '22' })
     ].join('');
   }
 
@@ -1011,12 +1011,21 @@ export function cleanExplanationLine(line) {
 
 export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap = new Map(), rawTypeKey = '') {
   const source = String(html ?? '');
-  const isMatchingAnswerType = rawTypeKey === 'MATCHING_FEATURES' || rawTypeKey === 'MATCHING_ENDINGS';
+  const normalizedRawTypeKey = String(rawTypeKey || '').trim().toUpperCase();
+  const isClusterAnswerType = normalizedRawTypeKey.startsWith('MATCHING_')
+    || normalizedRawTypeKey === 'SUMMARY_COMPLETION'
+    || normalizedRawTypeKey === 'SENTENCE_COMPLETION'
+    || normalizedRawTypeKey === 'SHORT_ANSWER';
   const escapeRegExp = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const wrapMatchingChoiceText = (choiceText) => `<strong>&quot;${escapeHtml(choiceText.length > 70 ? `${choiceText.slice(0, 67).trimEnd()}...` : choiceText)}&quot;</strong>`;
-  let preprocessedSource = source;
+  let preprocessedSource = source
+    .replace(/(<u>\s*<strong>\s*)Bước\s+(\d+)(\s*<\/strong>\s*<\/u>)/gi, '$1Step $2$3')
+    .replace(/(<strong>\s*)Bước\s+(\d+)(\s*<\/strong>)/gi, '$1Step $2$3')
+    .replace(/\bBước\s+(\d+)\s*:/gi, 'Step $1:')
+    .replace(/(<strong>\s*)(\d+)(\s*<\/strong>)\s*->/gi, '$1[[$2]]$3 ->')
+    .replace(/\b(\d+)\s*->/g, '[[$1]] ->');
 
-  if (isMatchingAnswerType) {
+  if (normalizedRawTypeKey.startsWith('MATCHING_')) {
     const normalizedChoiceEntries = Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
       .map(([key, value]) => [normalizeChoiceLabel(key), String(value ?? '').trim()])
       .filter(([key, value]) => Boolean(key) && Boolean(value));
@@ -1064,6 +1073,34 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
       .filter(([, value]) => Boolean(value))
   );
 
+  if (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+    for (const choiceText of normalizedChoiceMap.values()) {
+      const plain = String(choiceText || '').trim();
+      if (!plain) {
+        continue;
+      }
+
+      const escapedPlain = escapeRegExp(plain);
+      preprocessedSource = preprocessedSource
+        .replace(
+          new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+<strong>${escapedPlain}<\\/strong>\\s*:\\s*${escapedPlain}\\s*[:.]?`, 'gi'),
+          (_match, prefix = '') => `${prefix || ''}Đáp án <strong>${plain}</strong>`
+        )
+        .replace(
+          new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+<strong>${escapedPlain}<\\/strong>\\s*[:.]?\\s*$`, 'gi'),
+          (_match, prefix = '') => `${prefix || ''}Đáp án <strong>${plain}</strong>`
+        )
+        .replace(
+          new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+&quot;<strong>${escapedPlain}<\\/strong>&quot;\\s*:\\s*${escapedPlain}\\s*[:.]?`, 'gi'),
+          (_match, prefix = '') => `${prefix || ''}Đáp án <strong>${plain}</strong>`
+        )
+        .replace(
+          new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+&quot;<strong>${escapedPlain}<\\/strong>&quot;\\s*[:.]?\\s*$`, 'gi'),
+          (_match, prefix = '') => `${prefix || ''}Đáp án <strong>${plain}</strong>`
+        );
+    }
+  }
+
   const getChoiceText = (key) => normalizedChoiceMap.get(normalizeChoiceLabel(key)) || '';
 
   const isStandaloneAnswerText = (value) => {
@@ -1092,7 +1129,9 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
   };
 
   const replaceAnswerRefs = (htmlText) => {
-    const output = isMatchingAnswerType ? String(htmlText ?? '') : decodeHtmlEntities(String(htmlText ?? ''));
+    const output = normalizedRawTypeKey.startsWith('MATCHING_')
+      ? String(htmlText ?? '')
+      : decodeHtmlEntities(String(htmlText ?? ''));
     const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
     const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
     const replaceWithChoice = (match, key) => {
@@ -1105,8 +1144,12 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
         ? `${choiceText.slice(0, 67).trimEnd()}...`
         : choiceText;
 
-      if (isMatchingAnswerType) {
+      if (normalizedRawTypeKey.startsWith('MATCHING_')) {
         return `<strong>&quot;${escapeHtml(displayText)}&quot;</strong>`;
+      }
+
+      if (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+        return `Đáp án &quot;${escapeHtml(choiceText)}&quot;`;
       }
 
       return `Đáp án "<strong>${escapeHtml(displayText)}</strong>"`;
@@ -1187,24 +1230,84 @@ export function normalizeExplanationHtml(html, answerTokens = [], answerTextMap 
     });
   }
 
+  if (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+    normalizedHtml = normalizedHtml
+      .replace(
+        /(Giải thích\s+)?(?:-\s*)?Đáp\s*án\s+([A-Z0-9IVXLCDM]+)\s*:\s*[\s\S]*?\s*=>/gi,
+        (match, prefix = '', key) => {
+          const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(key));
+          if (!choiceText) {
+            return match;
+          }
+          return `${prefix || ''}Đáp án "${escapeHtml(choiceText)}" =>`;
+        }
+      )
+      .replace(
+        /(Giải thích\s+)?Đáp\s*án\s+&quot;([^<]+?)&quot;\s*:\s*\2\s*(=>|[:.]?)/gi,
+        (_match, prefix = '', choiceText, arrow) => `${prefix || ''}Đáp án &quot;${choiceText}&quot;${String(arrow || '').includes('=>') ? ' =>' : arrow}`
+      )
+      .replace(
+        /(Giải thích\s+)?(?:-\s*)?Đáp\s*án\s+([A-Z0-9IVXLCDM]+)\s*:\s*([^<\n\r]+?)(\s*=>)/gi,
+        (match, prefix = '', key, _value, arrow) => {
+          const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(key));
+          if (!choiceText) {
+            return match;
+          }
+          return `${prefix || ''}Đáp án "${escapeHtml(choiceText)}"${String(arrow || '').includes('=>') ? ' =>' : arrow}`;
+        }
+      );
+  }
+
+  if (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+    for (const choiceText of normalizedChoiceMap.values()) {
+      const plain = String(choiceText || '').trim();
+      if (!plain) {
+        continue;
+      }
+      const safePlain = escapeRegExp(plain);
+      normalizedHtml = normalizedHtml.replace(
+        new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+&quot;${safePlain}&quot;\\s*:\\s*[\\s\\S]*?\\s*=>`, 'gi'),
+        (_match, prefix = '') => `${prefix || ''}Đáp án &quot;${plain}&quot; =>`
+      );
+    }
+  }
+
   return normalizedHtml;
 }
 
 export function replaceAnswerRefsInXml(xml, answerTextMap = new Map(), rawTypeKey = '') {
+  const xmlSource = String(xml ?? '');
   const normalizedChoiceMap = new Map(
     Array.from(answerTextMap instanceof Map ? answerTextMap.entries() : Object.entries(answerTextMap || {}))
       .map(([key, value]) => [String(key).trim().toUpperCase(), String(value ?? '').trim()])
       .filter(([, value]) => Boolean(value))
   );
-  const isMatchingAnswerType = rawTypeKey === 'MATCHING_FEATURES' || rawTypeKey === 'MATCHING_ENDINGS';
+  const normalizedRawTypeKey = String(rawTypeKey || '').trim().toUpperCase();
+  const isClusterAnswerType = normalizedRawTypeKey.startsWith('MATCHING_')
+    || normalizedRawTypeKey === 'SUMMARY_COMPLETION'
+    || normalizedRawTypeKey === 'SENTENCE_COMPLETION'
+    || normalizedRawTypeKey === 'SHORT_ANSWER';
 
-  let output = String(xml ?? '');
+  let output = normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+    ? decodeHtmlEntities(xmlSource)
+    : xmlSource
+    .replace(/(<u>\s*<strong>\s*)Bước\s+(\d+)(\s*<\/strong>\s*<\/u>)/gi, '$1Step $2$3')
+    .replace(/(<strong>\s*)Bước\s+(\d+)(\s*<\/strong>)/gi, '$1Step $2$3')
+    .replace(/\bBước\s+(\d+)\s*:/gi, 'Step $1:')
+    .replace(/(<strong>\s*)(\d+)(\s*<\/strong>)\s*->/gi, '$1[[$2]]$3 ->')
+    .replace(/\b(\d+)\s*->/g, '[[$1]] ->');
+  if (isClusterAnswerType) {
+    output = output.replace(/(<strong>\s*)(\d+)(\s*<\/strong>)\s*->/gi, '$1[[$2]]$3 ->');
+    output = output.replace(/\b(\d+)\s*->/g, '[[$1]] ->');
+  }
   const strongTagPattern = String.raw`<\s*(?:strong|b)(?:\s[^>]*)?>\s*`;
   const strongClosePattern = String.raw`<\s*\/\s*(?:strong|b)\s*>`;
   normalizedChoiceMap.forEach((choiceText, choiceKey) => {
-    const replacement = isMatchingAnswerType
+    const replacement = normalizedRawTypeKey.startsWith('MATCHING_')
       ? `<strong>&quot;${escapeXml(choiceText)}&quot;</strong>`
-      : `Đáp án &quot;${escapeXml(choiceText)}&quot;`;
+      : (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY'
+        ? `Đáp án &quot;<strong>${escapeXml(choiceText)}</strong>&quot;`
+        : `Đáp án &quot;${escapeXml(choiceText)}&quot;`);
     output = output.replace(
       new RegExp(`(?:Đáp\\s*án|Answer|Câu)\\s*[:.\\-]?\\s*${strongTagPattern}${choiceKey}${strongClosePattern}`, 'gi'),
       replacement
@@ -1218,6 +1321,72 @@ export function replaceAnswerRefsInXml(xml, answerTextMap = new Map(), rawTypeKe
       ''
     );
   });
+
+  if (normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY') {
+    output = output
+      .replace(
+        /(Giải thích\s+)?(?:-\s*)?Đáp\s*án\s+([A-Z0-9IVXLCDM]+)\s*:\s*[\s\S]*?\s*=>/gi,
+        (match, prefix = '', key) => {
+          const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(key));
+          if (!choiceText) {
+            return match;
+          }
+          return `${prefix || ''}Đáp án &quot;<strong>${escapeXml(choiceText)}</strong>&quot; =>`;
+        }
+      );
+
+    for (const choiceText of normalizedChoiceMap.values()) {
+      const plain = String(choiceText || '').trim();
+      if (!plain) {
+        continue;
+      }
+
+      const xmlExact = `Đáp án <strong>${escapeXml(plain)}</strong>: ${escapeXml(plain)}:`;
+      const xmlExactWithPrefix = `Giải thích Đáp án <strong>${escapeXml(plain)}</strong>: ${escapeXml(plain)}:`;
+      output = output
+        .replaceAll(xmlExactWithPrefix, `Giải thích Đáp án <strong>${escapeXml(plain)}</strong>`)
+        .replaceAll(xmlExact, `Đáp án <strong>${escapeXml(plain)}</strong>`);
+    }
+
+    output = output
+      .replace(
+        /(Giải thích\s+)?Đáp\s*án\s+&quot;([^<]+?)&quot;\s*:\s*\2\s*(=>|[:.]?)/gi,
+        (_match, prefix = '', choiceText, arrow) => `${prefix || ''}Đáp án &quot;${choiceText}&quot;${String(arrow || '').includes('=>') ? ' =>' : arrow}`
+      )
+      .replace(
+        /(Giải thích\s+)?Đáp\s*án\s+&quot;([^<]+?)&quot;\s*:\s*[\s\S]*?\s*=>/gi,
+        (_match, prefix = '', choiceText) => `${prefix || ''}Đáp án &quot;${choiceText}&quot; =>`
+      )
+      .replace(
+        /(Giải thích\s+)?(?:-\s*)?Đáp\s*án\s+([A-Z0-9IVXLCDM]+)\s*:\s*([^<\n\r]+?)(\s*=>)/gi,
+        (match, prefix = '', key, _value, arrow) => {
+          const choiceText = normalizedChoiceMap.get(normalizeChoiceLabel(key));
+          if (!choiceText) {
+            return match;
+          }
+          return `${prefix || ''}Đáp án &quot;<strong>${escapeXml(choiceText)}</strong>&quot;${String(arrow || '').includes('=>') ? ' =>' : arrow}`;
+        }
+      );
+    for (const choiceText of normalizedChoiceMap.values()) {
+      const plain = String(choiceText || '').trim();
+      if (!plain) {
+        continue;
+      }
+      const safePlain = escapeXml(plain);
+      output = output.replace(
+        new RegExp(`(Giải thích\\s+)?Đáp\\s*án\\s+&quot;${safePlain}&quot;\\s*:\\s*[\\s\\S]*?\\s*=>`, 'gi'),
+        (_match, prefix = '') => `${prefix || ''}Đáp án &quot;<strong>${safePlain}</strong>&quot; =>`
+      );
+    }
+  }
+
+  if (String(process.env.E_LEARNING_DEBUG_READING || '').trim().toLowerCase() === 'true' && normalizedRawTypeKey === 'MULTIPLE_CHOICE_MANY' && /Đáp\s*án/i.test(xmlSource)) {
+    console.log('[replaceAnswerRefsInXml][MULTIPLE_CHOICE_MANY]', {
+      sourceSnippet: xmlSource.replace(/\s+/g, ' ').slice(0, 500),
+      outputSnippet: output.replace(/\s+/g, ' ').slice(0, 500),
+      choices: Array.from(normalizedChoiceMap.entries())
+    });
+  }
 
   return output;
 }
@@ -1515,7 +1684,7 @@ export function createDocxCore(deps) {
   } = deps;
 
   return {
-    async createDocx({ id, result, quizTypeOverride }) {
+    async createDocx({ id, result, quizTypeOverride, testMode = false }) {
       const quizType = resolveEffectiveQuizType(quizTypeOverride, result?.data?.quiz_type);
       console.log('[createDocx]', { id, quizTypeOverride, quizType });
       const imageRegistry = await buildImageRegistry(result);
@@ -1524,7 +1693,7 @@ export function createDocxCore(deps) {
         id,
         title: result?.data?.title
       });
-      const resultLines = deps.formatYouPassResult(result, quizTypeOverride);
+      const resultLines = deps.formatYouPassResult(result, quizTypeOverride, { testMode });
       const renderLine = (line) => {
         if (line.type === 'coverTitle') {
           return coverTitleParagraph(line.text);

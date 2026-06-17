@@ -170,7 +170,30 @@ export function htmlToTextWithBlankPlaceholders(value) {
 
 export function htmlWithBlankPlaceholders(value) {
   return String(value ?? '')
-    .replaceAll(/\{\[[\s\S]*?\]\[([^\]]+)\]\}/g, (_match, order) => `[__${htmlToText(order)}__]`);
+    .replaceAll(/\{\[[\s\S]*?\]\[([^\]]+)\]\}/g, (_match, order) => `[__${htmlToText(order)}__]`)
+    .replace(/<span\b([^>]*class="[^"]*gap-placeholder[^"]*"[^>]*)>([\s\S]*?)<\/span>/gi, (match, attrs, inner) => {
+      const orderMatch = attrs.match(/data-question-id="gf_(\d+)"/i)
+        || attrs.match(/data-question-order="(\d+)"/i)
+        || attrs.match(/data-order="(\d+)"/i);
+      const order = String(orderMatch?.[1] || '').trim();
+      const normalizedInner = String(inner || '').trim();
+
+      if (!order || !normalizedInner) {
+        return match;
+      }
+
+      const valueMatch = normalizedInner.match(/^(?:<strong>\s*)?(\d+)(?:\s*<\/strong>)?\s*(?:->|→)\s*([\s\S]+)$/i);
+      if (!valueMatch) {
+        return match;
+      }
+
+      const answer = valueMatch[2].trim();
+      if (!answer) {
+        return match;
+      }
+
+      return `<span${attrs}><strong>[[${order}]]</strong> -> ${answer}</span>`;
+    });
 }
 
 export function splitTextLines(value) {

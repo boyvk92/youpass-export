@@ -117,6 +117,16 @@ function normalizeListeningVocabEntry(node, fallbackMeta = {}) {
   };
 }
 
+function getListeningSpeaker(item, children = []) {
+  const childSpeaker = children?.[1]?.meta?.speaker || children?.[0]?.meta?.speaker || '';
+  return String(
+    item?.meta?.speaker
+    || childSpeaker
+    || item?.speaker
+    || ''
+  ).trim();
+}
+
 export function buildListeningVocabJsonEntries(vocabs) {
   if (!Array.isArray(vocabs) || vocabs.length === 0) {
     return [];
@@ -131,14 +141,21 @@ export function buildListeningVocabJsonEntries(vocabs) {
 
     const fallbackMeta = item?.meta || {};
     const children = getListeningChildren(item);
+    const speaker = getListeningSpeaker(item, children);
 
     if (children.length === 0) {
-      entries.push(normalizeListeningVocabEntry(item, fallbackMeta));
+      entries.push({
+        ...normalizeListeningVocabEntry(item, fallbackMeta),
+        speaker
+      });
       return;
     }
 
     children.forEach((child) => {
-      entries.push(normalizeListeningVocabEntry(child, fallbackMeta));
+      entries.push({
+        ...normalizeListeningVocabEntry(child, fallbackMeta),
+        speaker
+      });
     });
   });
 

@@ -110,7 +110,7 @@ function injectSummaryCompletionAnswers(html, answerMap) {
 
     const [order, answer] = entry;
     blankIndex += 1;
-    return `<strong>${order}</strong>-> <font color="C00000">${answer}</font>`;
+    return `<strong>[[${order}]]</strong>-> <font color="C00000">${answer}</font>`;
   });
 }
 
@@ -141,7 +141,7 @@ function injectMapDiagramLabelAnswers(html, answerMap) {
     const [, answer] = entry;
     blankIndex += 1;
     const orderLabel = explicitOrder || String(blankIndex);
-    return `<span${attrs}><strong>${orderLabel}</strong> -> <font color="C00000">${answer}</font></span>`;
+    return `<span${attrs}><strong>[[${orderLabel}]]</strong> -> <font color="C00000">${answer}</font></span>`;
   });
 }
 
@@ -153,7 +153,7 @@ function buildSummaryCompletionAnswerListHtml(answerMap) {
   const entries = [...answerMap.entries()]
     .sort((a, b) => Number(a[0]) - Number(b[0]));
 
-  return entries.map(([order, answer]) => `<p><strong>${escapeHtml(order)}</strong> -> <font color="C00000">${escapeHtml(answer)}</font></p>`).join('');
+  return entries.map(([order, answer]) => `<p><strong>[[${escapeHtml(order)}]]</strong> -> <font color="C00000">${escapeHtml(answer)}</font></p>`).join('');
 }
 
 function buildMatchingInfoContentHtml(questions = []) {
@@ -791,7 +791,7 @@ function formatQuestionPromptLine(order, text, rawTypeKey) {
     return `Question ${order}. ${questionText}`;
   }
 
-  return `Question ${order}`;
+  return `Question ${order}.`;
 }
 
 export function isFillInTheBlankQuestion(question) {
@@ -1191,14 +1191,16 @@ export function collectQuestionAnswerTokens(question, details = {}) {
 
 export function collectQuestionChoiceTextMap(details = {}) {
   const map = new Map();
-  const choices = Array.isArray(details.choices) ? details.choices : [];
+  const choices = Array.isArray(details.choices)
+    ? details.choices
+    : (Array.isArray(details.options) ? details.options : []);
 
   choices.forEach((choice, index) => {
     if (!choice) {
       return;
     }
 
-    const rawValue = String(choice.text ?? choice.displayText ?? '').trim();
+    const rawValue = String(choice.rawText ?? choice.text ?? choice.displayText ?? '').trim();
     const value = rawValue.replace(/^[A-Z0-9IVXLCDM]+\s*[.)]\s*/i, '').trim();
     const fallbackKey = String.fromCharCode(65 + index);
     const rawKey = normalizeChoiceLabel(choice.option ?? choice.key ?? choice.label ?? '');
@@ -1527,7 +1529,8 @@ export function getPartQuestions(part) {
 
 export function createReadingCore(deps = {}) {
   const { buildPassageBlocks } = deps;
-  function formatYouPassResult(result, quizTypeOverride) {
+  function formatYouPassResult(result, quizTypeOverride, options = {}) {
+    const { testMode = false } = options;
     const data = result?.data ?? result;
     const parts = extractYouPassParts(data);
     const quizTypeKey = resolveQuizType(resolveEffectiveQuizType(quizTypeOverride, data?.quiz_type)).key;
@@ -1538,39 +1541,45 @@ export function createReadingCore(deps = {}) {
     const buildQuestionInfoText = typeof deps.buildQuestionInfoText === 'function' ? deps.buildQuestionInfoText : null;
     const lines = [];
 
-    lines.push({ type: 'readingTestTitle', text: 'Test 1' });
+    if (!testMode) {
+      lines.push({ type: 'readingTestTitle', text: 'Test 1' });
+    }
 
-    if (data?.instruction) {
+    if (!testMode && data?.instruction) {
       lines.push({ type: 'heading', text: 'Instruction' });
       splitTextLines(htmlToText(data.instruction)).forEach((line) => lines.push({ type: 'text', text: line }));
     }
 
     parts.forEach((part, partIndex) => {
       const passageNumber = part.passage || part.sort || partIndex + 1;
-      if (partIndex > 0) {
+      if (!testMode && partIndex > 0) {
         lines.push({ type: 'pageBreak', text: '' });
       }
-      lines.push({ type: 'passageLabel', text: `PASSAGE ${passageNumber}` });
+      if (!testMode) {
+        lines.push({ type: 'passageLabel', text: `PASSAGE ${passageNumber}` });
 
-      const passage = splitPassageContent(part, data);
-      const passageBlocks = typeof buildPassageBlocks === 'function'
-        ? buildPassageBlocks(part, data, quizTypeKey)
-        : [];
-      if (passageBlocks.length > 0) {
-        if (passage.title) {
-          lines.push({ type: 'passageTitle', text: passage.title });
+        const passage = splitPassageContent(part, data);
+        const passageBlocks = typeof buildPassageBlocks === 'function'
+          ? buildPassageBlocks(part, data, quizTypeKey)
+          : [];
+        if (passageBlocks.length > 0) {
+          if (passage.title) {
+            lines.push({ type: 'passageTitle', text: passage.title });
+          }
+          lines.push({ type: 'passageListeningTable', blocks: passageBlocks });
+        } else if (passage.title || passage.bodyLines.length > 0) {
+          if (passage.title) {
+            lines.push({ type: 'passageTitle', text: passage.title });
+          }
+          passage.bodyLines.forEach((line) => lines.push({ type: 'passageText', text: line }));
         }
-        lines.push({ type: 'passageListeningTable', blocks: passageBlocks });
-      } else if (passage.title || passage.bodyLines.length > 0) {
-        if (passage.title) {
-          lines.push({ type: 'passageTitle', text: passage.title });
-        }
-        passage.bodyLines.forEach((line) => lines.push({ type: 'passageText', text: line }));
       }
 
       const partQuestions = getPartQuestions(part);
       if (partQuestions.length > 0) {
-        lines.push({ type: 'heading', text: 'Questions and answers' });
+        if (!testMode) {
+          lines.push({ type: 'heading', text: 'Questions and answers' });
+        }
         const emittedQuestionOrders = new Set();
         const emittedSharedOptionGroups = new Set();
         const emittedSelectionOptionGroups = new Set();
@@ -1649,6 +1658,20 @@ export function createReadingCore(deps = {}) {
         }
 
         for (const question of partQuestions) {
+          if (testMode && lines.length > 0) {
+            lines.push({ type: 'pageBreak', text: '' });
+          }
+
+          if (testMode) {
+            const testTypeText = String(
+              question?.type
+              || question?.question_type
+              || getQuestionRawTypeKey(question)
+              || 'Question'
+            ).trim();
+            lines.push({ type: 'heading', text: `Questions and answers => ${testTypeText}` });
+          }
+
           const questionGroupKey = String(question.shared_question_group_key || '').trim();
           const questionGroupMeta = questionGroupMetaByKey.get(questionGroupKey) || {};
           const questionGroupTitle = String(questionGroupMeta.title || '').trim();
@@ -1786,7 +1809,7 @@ export function createReadingCore(deps = {}) {
                 : formatGapQuestionLabel(answer.questionText, order, rawTypeKey);
 
               lines.push({ type: 'questionTitle',
-                questionInfoText: questionInfoTextFor(question), text: order ? `Question ${order}` : 'Question', order, rawTypeKey });
+                questionInfoText: questionInfoTextFor(question), text: order ? `Question ${order}.` : 'Question', order, rawTypeKey });
               lines.push({ type: 'questionText', text: questionLabel });
               addExplanationLines(lines, question, order, explanationsByOrder, { answer: answer.answer }, useReadingExplanation);
               if (order) {
@@ -1862,6 +1885,7 @@ export function createReadingCore(deps = {}) {
                   choices: renderedChoiceOptions.map((option) => ({
                     ...option,
                     displayText: formatOptionText(option),
+                    rawText: option.text,
                     correct: option.correct || option.option === choiceAnswer
                   }))
                 }, useReadingExplanation);
@@ -1888,6 +1912,7 @@ export function createReadingCore(deps = {}) {
                 choices: renderedChoiceOptions.map((option) => ({
                   ...option,
                   displayText: formatOptionText(option),
+                  rawText: option.text,
                   correct: isStatementQuestionType(rawTypeKey)
                     ? option.correct
                     : (option.correct || option.option === choiceAnswer)
@@ -1935,19 +1960,33 @@ export function createReadingCore(deps = {}) {
               lines.push({
                 type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question, index),
-                text: resolvedOrder ? `Question ${resolvedOrder}` : 'Question',
+                text: resolvedOrder ? `Question ${resolvedOrder}.` : 'Question',
                 questionText: '',
                 order: resolvedOrder,
                 rawTypeKey
               });
               const keywords = extractQuestionKeywords(rowQuestion);
-              const answerText = formatOptionText(option);
+              const answerText = String(option.rawText ?? option.text ?? '').trim() || formatOptionText(option);
+              const choiceTextMap = new Map([
+                ...collectGroupChoiceTextMap(question).entries(),
+                ...collectQuestionChoiceTextMap(question).entries()
+              ]);
               const normalizedExplanation = normalizeExplanationHtml(
                 rowExplain,
                 [option.option],
-                new Map([[normalizeChoiceLabel(option.option), answerText]]),
+                choiceTextMap,
                 rawTypeKey
               );
+
+              if (String(process.env.E_LEARNING_DEBUG_READING || '').trim().toLowerCase() === 'true' && (String(question.order || '') === '23' || /Đáp\s*án\s+[A-Z0-9IVXLCDM]+/i.test(String(rowExplain || '')) || /Đáp\s*án\s+[A-Z0-9IVXLCDM]+/i.test(String(normalizedExplanation || '')))) {
+                console.log('[reading][MULTIPLE_CHOICE_MANY]', {
+                  order: question.order,
+                  option: option.option,
+                  answerText,
+                  rowExplain,
+                  normalizedExplanation
+                });
+              }
 
               if (keywords.length > 0) {
                 lines.push({
@@ -1976,7 +2015,7 @@ export function createReadingCore(deps = {}) {
             lines.push({
               type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question),
-              text: `Question ${question.order}`,
+              text: `Question ${question.order}.`,
               questionText: '',
               order: question.order,
               rawTypeKey
@@ -2029,7 +2068,8 @@ export function createReadingCore(deps = {}) {
                 choices: renderedChoiceOptions.map((option) => ({
                   ...option,
                   displayText: formatOptionText(option),
-                  correct: option.correct || option.option === choiceAnswer
+                    rawText: option.text,
+                    correct: option.correct || option.option === choiceAnswer
                 }))
               }, useReadingExplanation);
               emittedQuestionOrders.add(String(question.order));
@@ -2063,6 +2103,7 @@ export function createReadingCore(deps = {}) {
                 choices: renderedChoiceOptions.map((option) => ({
                   ...option,
                   displayText: formatOptionText(option),
+                  rawText: option.text,
                   correct: option.correct
                 }))
               }, useReadingExplanation);
@@ -2073,7 +2114,7 @@ export function createReadingCore(deps = {}) {
 
           if (answers.length === 0 && !isMatchingHeadings) {
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              const questionTitleText = `Question ${question.order}`;
+              const questionTitleText = `Question ${question.order}.`;
               lines.push({
                 type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question),
@@ -2108,7 +2149,7 @@ export function createReadingCore(deps = {}) {
 
           if (answers.length === 0 && isMatchingHeadings) {
             if ((fallback || directAnswer) && !emittedQuestionOrders.has(String(question.order))) {
-              const questionTitleText = `Question ${question.order}`;
+              const questionTitleText = `Question ${question.order}.`;
               lines.push({
                 type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question),
@@ -2138,7 +2179,7 @@ export function createReadingCore(deps = {}) {
               order,
               rawTypeKey
             );
-            const questionTitleText = `Question ${order}`;
+            const questionTitleText = `Question ${order}.`;
             lines.push({
               type: 'questionTitle',
                 questionInfoText: questionInfoTextFor(question),
@@ -2176,6 +2217,7 @@ export function createReadingCore(deps = {}) {
               choices: renderedChoiceOptions.map((option) => ({
                 ...option,
                 displayText: formatOptionText(option),
+                rawText: option.text,
                 correct: option.correct || option.option === choiceAnswer
               }))
             }, useReadingExplanation);

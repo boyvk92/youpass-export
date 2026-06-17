@@ -4,8 +4,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createExportDocsCore } from './core/export-docs.js';
 import { createExportMultiCore } from './core/export-multi.js';
-import { renderBulkForm, renderForm } from './core/view.js';
+import { renderBulkForm, renderForm, renderTestForm } from './core/view.js';
+import { fetchELearningResult, resolveSkillApiUrl, normalizeSkillValue } from './core/helper.js';
+import { filterResultByQuestionOrders, parseTestModeConfigGroups } from './core/test-mode.js';
 import { htmlToText } from './skill/helper.js';
+import { normalizeListeningExportResult } from './skill/listening.js';
+import { extractYouPassParts } from './skill/reading.js';
 
 const DEFAULT_API_URL = 'https://api.youpass.vn/v1/quizzes/id?included_vocabs=true';
 
@@ -42,7 +46,6 @@ const exportDocsCore = createExportDocsCore({
 });
 
 const exportMultiCore = createExportMultiCore({
-  htmlToText,
   createDocx: exportDocsCore.createDocx,
   buildCleanExportRecord: exportDocsCore.buildCleanExportRecord,
   apiUrl: API_URL,
@@ -150,6 +153,11 @@ export async function handleRequest(request, response) {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/test') {
+      send(response, 200, renderTestForm(), contentTypes.html);
+      return;
+    }
+
     if (request.method === 'POST' && requestUrl.pathname === '/export') {
       await exportDocsCore.handleExportRequest(request, response);
       return;
@@ -184,10 +192,94 @@ export async function handleRequest(request, response) {
       return;
     }
 
+    if (request.method === 'POST' && requestUrl.pathname === '/export-test') {
+      const body = await collectBody(request);
+      const form = parseFormBody(request, body);
+      const skill = getFormFieldValue(body, form, 'skill');
+      const token = getFormFieldValue(body, form, 'token');
+
+      if (!skill || !token) {
+        send(response, 400, renderTestForm('Vui long nhap skill va token.'), contentTypes.html);
+        return;
+      }
+
+      const normalizedSkill = normalizeSkillValue(skill);
+      if (normalizedSkill !== 'reading') {
+        send(response, 400, renderTestForm('Che do test hien chi ho tro Reading tu core/testDe.json.'), contentTypes.html);
+        return;
+      }
+
+      const testConfig = JSON.parse(readFileSync('core/testDe.json', 'utf8'));
+      const skillConfig = testConfig?.[normalizedSkill];
+      if (!Array.isArray(skillConfig) || skillConfig.length === 0) {
+        send(response, 400, renderTestForm('Khong tim thay cau hinh Reading trong core/testDe.json.'), contentTypes.html);
+        return;
+      }
+
+      const configGroups = parseTestModeConfigGroups(JSON.stringify(skillConfig));
+      const combinedParts = [];
+      let firstResult = null;
+      let firstId = '';
+
+      for (const group of configGroups) {
+        const result = await fetchELearningResult({ apiUrl: resolveSkillApiUrl(API_URL, skill), id: group.id, token });
+        const normalizedResult = normalizedSkill === 'listening'
+          ? normalizeListeningExportResult(result)
+          : result;
+        const filteredResult = filterResultByQuestionOrders(normalizedResult, group.orders);
+        const filteredParts = extractYouPassParts(filteredResult?.data ?? filteredResult);
+
+        if (filteredParts.length === 0) {
+          continue;
+        }
+
+        if (!firstResult) {
+          firstResult = filteredResult;
+          firstId = group.id;
+        }
+
+        combinedParts.push(...filteredParts);
+      }
+
+      if (combinedParts.length === 0) {
+        send(response, 400, renderTestForm('Khong tim thay cau nao khop voi core/testDe.json.'), contentTypes.html);
+        return;
+      }
+
+      const combinedResult = structuredClone(firstResult);
+      if (combinedResult?.data && typeof combinedResult.data === 'object') {
+        combinedResult.data = {
+          ...combinedResult.data,
+          part: combinedParts,
+          parts: combinedParts
+        };
+      } else {
+        combinedResult.data = {
+          part: combinedParts,
+          parts: combinedParts
+        };
+      }
+
+      const docx = await exportDocsCore.createDocx({ id: firstId, result: combinedResult, quizTypeOverride: skill, testMode: true });
+      const title = String(combinedResult?.data?.title || `quiz-${firstId || 'test'}`).trim();
+      const fileName = `${title.replaceAll(/[^a-zA-Z0-9._-]+/g, '_') || `quiz-${firstId || 'test'}`}.docx`;
+
+      send(response, 200, docx, contentTypes.docx, {
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Length': docx.length
+      });
+      return;
+    }
+
     send(response, 404, 'Not found');
   } catch (error) {
     if (requestUrl.pathname === '/bulk' || requestUrl.pathname === '/export-bulk') {
       send(response, 500, renderBulkForm(error.message), contentTypes.html);
+      return;
+    }
+
+    if (requestUrl.pathname === '/test' || requestUrl.pathname === '/export-test') {
+      send(response, 500, renderTestForm(error.message), contentTypes.html);
       return;
     }
 
